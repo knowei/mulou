@@ -1,0 +1,1906 @@
+package com.dmanime.app
+
+import android.app.Application
+import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.dmanime.catalog.CalendarDay
+import com.dmanime.catalog.CatalogSubject
+import com.dmanime.catalog.SubjectCharacter
+import com.dmanime.catalog.Images
+import com.dmanime.catalog.SearchResult
+import com.dmanime.catalog.SubjectDetail
+import com.dmanime.rules.css1.Css1Converter
+import com.dmanime.rules.engine.RuleEngine
+import com.dmanime.rules.model.AnimeRule
+import com.dmanime.rules.model.Road
+import com.dmanime.rules.model.RuleJson
+import com.dmanime.rules.model.SearchItem
+import com.dmanime.rules.model.encodeRule
+import com.dmanime.rules.model.parseRule
+import com.dmanime.rules.net.HttpUrlConnectionClient
+import com.dmanime.sniff.MediaKind
+import com.dmanime.sniff.MediaUrls
+import com.dmanime.sniff.SniffCandidate
+import com.dmanime.sniff.SniffResolver
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+
+enum class Screen { Home, Search, Mine, Detail, Chapters, Player, Verify, Health, Season }
+
+/** 一个源的体检结果。status: ok / empty / error */
+data class SourceHealth(
+    val rule: String,
+    val status: String,
+    val items: Int = 0,
+    val roads: Int = 0,
+    val error: String? = null,
+    val latencyMs: Long = 0,
+)
+
+/** 搜索页的两种模式：本地索引 / 直接搜片源。 */
+enum class SearchMode { Index, Sources }
+
+/** 播放页状态机。 */
+enum class PlayPhase { Idle, Searching, Starting, Playing, Failed }
+
+data class PlayMedia(val url: String, val headers: Map<String, String>, val note: String = "")
+
+/** 索引层状态。缓存优先：days 有值就能渲染，loading/error 只是叠加状态。 */
+data class HomeState(
+    val loading: Boolean = false,
+    val days: List<CalendarDay> = emptyList(),
+    val error: String? = null,
+    val updatedAt: Long = 0L,
+)
+
+/** 为什么点不了/播不了这一集。 */
+enum class GateReason { NotAired, SourceBehind, NoSource }
+
+data class EpisodeGate(
+    val reason: GateReason,
+    val requested: Int,
+    val expected: Int,
+    val sourceMax: Int,
+    val ruleName: String = "",
+    val entrySrc: String = "",
+    val entryName: String = "",
+    val rule: AnimeRule? = null,
+)
+
+/** 一个源的探测结果：线路、耗时、失败原因。 */
+data class SourceStatus(
+    val probing: Boolean = false,
+    val roads: List<Road> = emptyList(),
+    val error: String? = null,
+    val latencyMs: Long = 0,
+) {
+    val failed: Boolean get() = error != null
+    val ready: Boolean get() = roads.isNotEmpty() && error == null
+}
+
+/** 一个源的搜索结果。失败/空结果都保留，直接展示在原位。 */
+data class SourceHit(
+    val rule: AnimeRule,
+    val ruleName: String,
+    val items: List<SearchItem> = emptyList(),
+    val error: String? = null,
+    val done: Boolean = false,
+)
+
+data class UiState(
+    val screen: Screen = Screen.Home,
+    val rules: List<AnimeRule> = emptyList(),
+    val selected: AnimeRule? = null,
+    val keyword: String = "",
+    val busy: Boolean = false,
+    val hits: List<SourceHit> = emptyList(),
+    val completed: Int = 0,
+    val total: Int = 0,
+    val roads: List<Road> = emptyList(),
+    val title: String = "",
+    val playPageUrl: String = "",
+    val playMedia: PlayMedia? = null,
+    val logs: List<String> = emptyList(),
+    val error: String? = null,
+    val home: HomeState = HomeState(),
+    val detail: CatalogSubject? = null,
+    val detailOrigin: Screen = Screen.Home,
+    val indexBaseUrl: String = "",
+    val indexProbe: String = "",
+    val imageBase: String = "",
+    val detailInfo: SubjectDetail? = null,
+    val detailLoading: Boolean = false,
+    val watches: List<WatchEntry> = emptyList(),
+    val playSubjectId: Int = 0,
+    val playRoadIndex: Int = 0,
+    val playEpisodeIndex: Int = -1,
+    val playStartMs: Long = 0,
+    val playPhase: PlayPhase = PlayPhase.Idle,
+    val episodeNumber: Int = 1,
+    val failedSources: Set<String> = emptySet(),
+    val autoSwitches: Int = 0,
+    val searchMode: SearchMode = SearchMode.Index,
+    val playQuery: String = "",
+    val onlineResults: List<SearchResult> = emptyList(),
+    val onlineSearching: Boolean = false,
+    val entryRuleName: String = "",
+    val entrySrc: String = "",
+    val entryName: String = "",
+    val playerFullscreen: Boolean = false,
+    val sourceStatus: Map<String, SourceStatus> = emptyMap(),
+    val searchHistory: List<String> = emptyList(),
+    /** 从播放页返回时该回到哪一屏。 */
+    val playerBackTo: Screen = Screen.Detail,
+    val showFailedSources: Boolean = false,
+    val verifyUrl: String = "",
+    val verifyRuleName: String = "",
+    val verifyDone: Boolean = false,
+    val episodeSheet: Boolean = false,
+    val episodeLoading: Boolean = false,
+    val episodeGate: EpisodeGate? = null,
+    /** 下一集什么时候播（AniList）。没用/匹配不上时为 null。 */
+    val airing: AiringInfo? = null,
+    val characters: List<SubjectCharacter> = emptyList(),
+    /** 主题：light / dark / system */
+    val themeMode: String = "light",
+    /** 导航方向：true=前进（新页面从右滑入），false=返回（从左滑入） */
+    val navForward: Boolean = true,
+    val seasonYear: Int = 0,
+    val seasonQuarter: Int = 0,
+    val seasonItems: List<CatalogSubject> = emptyList(),
+    val seasonTotal: Int = 0,
+    val seasonLoading: Boolean = false,
+    val seasonError: String? = null,
+    val health: List<SourceHealth> = emptyList(),
+    val healthBusy: Boolean = false,
+    val healthKeyword: String = "",
+    val healthDeep: Boolean = false,
+    val alerts: List<EpisodeAlert> = emptyList(),
+)
+
+class AppViewModel(app: Application) : AndroidViewModel(app) {
+
+    private companion object {
+        /** 自动换源上限：超过就停下来让用户决定，避免无限重试。 */
+        const val MAX_AUTO_SWITCH = 3
+
+        /** 起播前的收敛窗口，等更多源到齐再挑，避免选到同名第一季。 */
+        const val AUTO_PLAY_SETTLE_MS = 1_200L
+    }
+
+    var state by mutableStateOf(UiState())
+        private set
+
+    private val cookieStore = CookieStore(app)
+    private val alertStore = AlertStore(app)
+    private val aniList = AniListClient(app)
+    private val engine = RuleEngine(
+        HttpUrlConnectionClient(
+            connectTimeoutMs = 6_000,
+            readTimeoutMs = 8_000,
+            cookieFor = { url -> cookieStore.cookieFor(url) },
+        )
+    )
+    private val ruleFile = File(app.filesDir, "rules.ndjson")
+    private val searchPrefs = app.getSharedPreferences("search", android.content.Context.MODE_PRIVATE)
+    private val uiPrefs = app.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE)
+    private val catalog = CatalogRepository(app)
+    private val watchStore = WatchStore(app)
+
+    /** 自动播放管线：armed 表示当前这次播放允许自动找源/换源。 */
+    private var autoPlayArmed = false
+    private var attempting = false
+    private var autoPlayJob: kotlinx.coroutines.Job? = null
+    private var onlineJob: kotlinx.coroutines.Job? = null
+    /** 选集弹层正在等集数：每个源到货就试一次，拿到线路就停。 */
+    private var pendingPicker = false
+    /** 所有候选源都缺这一集时，记下最接近的缺口用于提示。 */
+    private var gateCandidate: EpisodeGate? = null
+    private val triedSources = mutableSetOf<String>()
+
+    init {
+        loadRules()
+        state = state.copy(
+            indexBaseUrl = catalog.baseUrl,
+            imageBase = catalog.imageBase,
+            themeMode = uiPrefs.getString("theme", "light") ?: "light",
+            alerts = alertStore.load(),
+            searchHistory = searchPrefs.getString("history", null)
+                ?.split('\u0001')?.filter { it.isNotBlank() }.orEmpty(),
+            watches = watchStore.load().sortedByDescending { it.updatedAt },
+        )
+        loadHome()
+    }
+
+    // ---------- 索引 ----------
+
+    /** 索引基址可配置：默认 api.bgm.tv，被污染时换成可达的反代/镜像。 */
+    fun updateIndexBase(url: String) {
+        val normalized = url.trim().trimEnd('/')
+        if (normalized.isEmpty() || !normalized.startsWith("http")) {
+            showError("索引地址需要以 http(s):// 开头")
+            return
+        }
+        catalog.baseUrl = normalized
+        state = state.copy(indexBaseUrl = normalized, error = null)
+        appendLog("索引地址已更新：$normalized")
+    }
+
+    fun refreshIndex() = loadHome(force = true)
+
+    /** 封面前缀：把 lain.bgm.tv 换成可达的反代（如 http://host/img），留空则直连。 */
+    fun updateImageBase(prefix: String) {
+        val normalized = prefix.trim().trimEnd('/')
+        if (normalized.isNotEmpty() && !normalized.startsWith("http")) {
+            showError("封面地址需要以 http(s):// 开头，或留空")
+            return
+        }
+        catalog.imageBase = normalized
+        state = state.copy(imageBase = normalized, error = null)
+        appendLog(
+            if (normalized.isEmpty()) "封面地址已清空（直连 lain.bgm.tv）"
+            else "封面地址已更新：$normalized"
+        )
+    }
+
+    /** 只测连通性，不动缓存；用来分辨是 DNS/超时/HTTP/格式问题。 */
+    fun testIndexConnection() {
+        if (state.indexProbe == "测试中…") return
+        state = state.copy(indexProbe = "测试中…")
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { catalog.probe() } }
+            state = state.copy(
+                indexProbe = result.fold(
+                    onSuccess = { it },
+                    onFailure = { "失败：${describe(it)}" },
+                )
+            )
+        }
+    }
+
+    /** 从剪贴板导入日历 JSON，绕开网络直接落盘。 */
+    fun importIndexJson(text: String) {
+        val days = runCatching { catalog.importFromText(text) }.getOrElse {
+            showError("索引 JSON 解析失败: ${it.message?.take(60)}")
+            return
+        }
+        state = state.copy(
+            home = HomeState(
+                loading = false,
+                days = days,
+                updatedAt = System.currentTimeMillis(),
+                error = null,
+            ),
+            error = null,
+        )
+        appendLog("索引已导入：${days.sumOf { it.items.size }} 部")
+    }
+
+    /**
+     * 先读缓存立刻渲染，再按需刷新（6 小时 TTL）。
+     * 首页永远不该因为网络问题白屏。
+     */
+    fun loadHome(force: Boolean = false) {
+        val cached = catalog.cached()
+        if (cached != null) {
+            state = state.copy(home = state.home.copy(days = cached, updatedAt = catalog.cachedAt()))
+        }
+
+        val fresh = cached != null && System.currentTimeMillis() - catalog.cachedAt() < 6 * 3600_000L
+        if (!force && fresh) return
+
+        state = state.copy(home = state.home.copy(loading = true, error = null))
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { catalog.refresh() } }
+            result.onSuccess { days ->
+                state = state.copy(
+                    home = HomeState(
+                        loading = false,
+                        days = days,
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                )
+                appendLog("索引已更新：${days.sumOf { it.items.size }} 部当季番剧")
+            }.onFailure { error ->
+                state = state.copy(
+                    home = state.home.copy(loading = false, error = describe(error))
+                )
+            }
+        }
+    }
+
+    fun goHome() {
+        state = state.copy(screen = Screen.Home)
+    }
+
+    fun goSearch() {
+        state = state.copy(screen = Screen.Search, navForward = true)
+    }
+
+    fun goMine() {
+        state = state.copy(screen = Screen.Mine, navForward = true)
+    }
+
+    fun openSubject(subject: CatalogSubject) {
+        state = state.copy(
+            screen = Screen.Detail,
+            navForward = true,
+            detail = subject,
+            detailOrigin = state.screen,
+            hits = emptyList(),
+            roads = emptyList(),
+            error = null,
+            detailInfo = null,
+            airing = null,
+            characters = emptyList(),
+            playSubjectId = subject.id,
+            entryRuleName = "",
+            entrySrc = "",
+            entryName = "",
+        )
+        loadDetailInfo(subject.id)
+    }
+
+    /** 详情页的富信息（简介全文 / 标签 / 集数 / 评分人数）。 */
+    fun loadDetailInfo(id: Int) {
+        state = state.copy(detailLoading = true)
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { catalog.subjectDetail(id) } }
+            result.onSuccess { detail ->
+                state = state.copy(detailInfo = detail, detailLoading = false)
+                mergeWatchMeta(detail)
+                state.detail?.let { loadAiring(it) }
+            }.onFailure {
+                state = state.copy(detailLoading = false)
+                appendLog("详情加载失败：${describe(it)}")
+            }
+        }
+        // 角色 / 声优单独拿，失败了不影响详情主体
+        viewModelScope.launch {
+            val list = withContext(Dispatchers.IO) {
+                runCatching { catalog.characters(id) }.getOrDefault(emptyList<SubjectCharacter>())
+            }
+            if (state.detail?.id == id) {
+                state = state.copy(characters = list)
+                if (list.isNotEmpty()) appendLog("角色 ${list.size} 位")
+            }
+        }
+    }
+
+    // ---------- 源体检 ----------
+
+    // ---------- 季度番剧表 ----------
+
+    private fun currentSeason(): Pair<Int, Int> {
+        val now = java.time.LocalDate.now()
+        return now.year to (((now.monthValue - 1) / 3) + 1)
+    }
+
+    /** 季度 -> [起, 止) 的日期区间。 */
+    private fun seasonRange(year: Int, quarter: Int): Pair<String, String> {
+        val startMonth = (quarter - 1) * 3 + 1
+        val start = java.time.LocalDate.of(year, startMonth, 1)
+        return start.toString() to start.plusMonths(3).toString()
+    }
+
+    /** 直接跳到某个季度（季度选择器用）。 */
+    fun jumpSeason(year: Int, quarter: Int) {
+        if (year <= 0 || quarter !in 1..4) return
+        state = state.copy(
+            seasonYear = year,
+            seasonQuarter = quarter,
+            seasonItems = emptyList(),
+            seasonTotal = 0,
+            navForward = true,
+        )
+        loadSeason(reset = true)
+    }
+    fun openSeason() {
+        val (y, q) = if (state.seasonYear > 0) {
+            state.seasonYear to state.seasonQuarter
+        } else {
+            currentSeason()
+        }
+        state = state.copy(
+            screen = Screen.Season,
+            navForward = true,
+            seasonYear = y,
+            seasonQuarter = q,
+            seasonItems = emptyList(),
+            seasonTotal = 0,
+        )
+        loadSeason(reset = true)
+    }
+
+    /** ◀ ▶ 切季度。 */
+    fun shiftSeason(delta: Int) {
+        var y = state.seasonYear
+        var q = state.seasonQuarter + delta
+        if (q > 4) {
+            q = 1
+            y += 1
+        } else if (q < 1) {
+            q = 4
+            y -= 1
+        }
+        state = state.copy(
+            seasonYear = y,
+            seasonQuarter = q,
+            seasonItems = emptyList(),
+            seasonTotal = 0,
+        )
+        loadSeason(reset = true)
+    }
+
+    /** 拉取季度表；reset=false 时按当前已加载数量翻页。 */
+    fun loadSeason(reset: Boolean = false) {
+        if (state.seasonLoading) return
+        val year = state.seasonYear
+        val quarter = state.seasonQuarter
+        if (year == 0 || quarter == 0) return
+        val offset = if (reset) 0 else state.seasonItems.size
+        if (!reset && state.seasonTotal > 0 && offset >= state.seasonTotal) return
+
+        state = state.copy(seasonLoading = true, seasonError = null)
+        viewModelScope.launch {
+            val (start, end) = seasonRange(year, quarter)
+            val result = withContext(Dispatchers.IO) {
+                runCatching { catalog.searchSeason(start, end, offset) }
+            }
+            state = state.copy(seasonLoading = false)
+            result.onSuccess { (list, total) ->
+                if (state.seasonYear != year || state.seasonQuarter != quarter) return@onSuccess
+                // 只在本页内排序后追加，别对已加载的整表重排：
+                // 全局重排会把新页里日期更早的条目插到最前，LazyGrid 位置跟着跳。
+                val pageSorted = list.sortedWith(
+                    compareBy<CatalogSubject>({ it.airDate.isBlank() }, { it.airDate })
+                )
+                val merged = if (offset == 0) pageSorted else state.seasonItems + pageSorted
+                state = state.copy(seasonItems = merged, seasonTotal = total)
+                appendLog("${year} 第 ${quarter} 季：${merged.size}/$total 部")
+            }.onFailure {
+                if (state.seasonYear == year && state.seasonQuarter == quarter) {
+                    state = state.copy(seasonError = describe(it))
+                }
+            }
+        }
+    }
+    /** 主题切换：light / dark / system。 */
+    fun setThemeMode(mode: String) {
+        if (mode != "light" && mode != "dark" && mode != "system") return
+        uiPrefs.edit().putString("theme", mode).apply()
+        state = state.copy(themeMode = mode)
+    }
+    fun openHealth() {
+        state = state.copy(
+            screen = Screen.Health,
+            healthKeyword = state.keyword.ifBlank { state.playQuery },
+            health = emptyList(),
+        )
+    }
+
+    fun updateHealthKeyword(text: String) {
+        state = state.copy(healthKeyword = text)
+    }
+
+    fun closeHealth() {
+        state = state.copy(screen = Screen.Mine, navForward = true)
+    }
+
+    /**
+     * 对全部规则跑一遍体检。
+     *
+     * 浅检只搜索：判断站点活着、能搜到东西（快，52 个源约 20 秒）；
+     * 深检再取一次线路：只有真拿到可播放线路才算"能用"（慢一倍，但结果可信）。
+     */
+    fun runHealthCheck(deep: Boolean) {
+        if (state.healthBusy) return
+        val keyword = state.healthKeyword.trim().ifBlank { state.keyword.trim() }
+        if (keyword.isBlank()) {
+            showError("先在搜索页输入番名，或在这里填一个")
+            return
+        }
+        val rules = state.rules
+        if (rules.isEmpty()) {
+            showError("还没有规则")
+            return
+        }
+
+        state = state.copy(
+            health = emptyList(),
+            healthBusy = true,
+            healthDeep = deep,
+            healthKeyword = keyword,
+        )
+        appendLog("体检开始：${rules.size} 个源，${if (deep) "深检" else "浅检"}")
+
+        viewModelScope.launch {
+            val gate = Semaphore(4)
+            val jobs = rules.map { rule ->
+                launch {
+                    gate.withPermit {
+                        val started = System.currentTimeMillis()
+                        val outcome = withContext(Dispatchers.IO) {
+                            runCatching { engine.search(rule, keyword) }
+                        }
+                        val elapsed = System.currentTimeMillis() - started
+                        val health = outcome.fold(
+                            onSuccess = { result ->
+                                if (result.items.isEmpty()) {
+                                    SourceHealth(rule.name, "empty", latencyMs = elapsed)
+                                } else if (!deep) {
+                                    SourceHealth(rule.name, "ok", result.items.size, 0, null, elapsed)
+                                } else {
+                                    val first = result.items.first()
+                                    val chapters = withContext(Dispatchers.IO) {
+                                        runCatching { engine.chapters(rule, first.src) }.getOrNull()
+                                    }
+                                    val usable = chapters?.roads?.count { it.urls.isNotEmpty() } ?: 0
+                                    if (usable > 0) {
+                                        SourceHealth(rule.name, "ok", result.items.size, usable, null, elapsed)
+                                    } else {
+                                        SourceHealth(
+                                            rule.name, "error", result.items.size, 0,
+                                            "有结果但取不到线路", elapsed,
+                                        )
+                                    }
+                                }
+                            },
+                            onFailure = { error ->
+                                SourceHealth(rule.name, "error", 0, 0, describe(error), elapsed)
+                            },
+                        )
+                        state = state.copy(health = state.health + health)
+                    }
+                }
+            }
+            jobs.joinAll()
+            state = state.copy(healthBusy = false)
+            val ok = state.health.count { it.status == "ok" }
+            appendLog("体检完成：$ok/${state.health.size} 个源可用")
+        }
+    }
+
+    /** 体检报告的纯文本版，用系统分享导出。 */
+    fun healthReportText(): String {
+        val list = state.health
+        if (list.isEmpty()) return "还没有体检结果"
+        val ok = list.count { it.status == "ok" }
+        val empty = list.count { it.status == "empty" }
+        val failed = list.count { it.status == "error" }
+        return buildString {
+            appendLine("番仓 · 源体检")
+            appendLine("关键词：${state.healthKeyword}")
+            appendLine("模式：${if (state.healthDeep) "深检（搜索 + 取线路）" else "浅检（仅搜索）"}")
+            appendLine("结果：可用 $ok · 空 $empty · 失败 $failed（共 ${list.size}）")
+            appendLine()
+            list.sortedBy { when (it.status) { "ok" -> 0; "empty" -> 1; else -> 2 } }.forEach { h ->
+                append("- [${if (h.status == "ok") "可用" else if (h.status == "empty") "空" else "失败"}] ")
+                append(h.rule)
+                if (h.status == "ok") {
+                    append("：${h.items} 条结果")
+                    if (h.roads > 0) append("，${h.roads} 条线路")
+                }
+                h.error?.let { append("：$it") }
+                append("（${h.latencyMs}ms）")
+                appendLine()
+            }
+        }
+    }
+
+    /** 查「下一集什么时候播」：只对能匹配上 AniList 的番生效，失败就静默不显示。 */
+    private fun loadAiring(subject: CatalogSubject) {
+        viewModelScope.launch {
+            val info = withContext(Dispatchers.IO) {
+                runCatching { aniList.nextAiring(subject) }.getOrNull()
+            }
+            if (state.detail?.id != subject.id) return@launch
+            state = state.copy(airing = info)
+            if (info != null) appendLog("下一集：第 ${info.episode} 集（AniList 匹配成功）")
+        }
+    }
+    /** 追番 / 取消追番。 */
+    fun toggleWatch() {
+        val subject = state.detail ?: return
+        val existing = state.watches.firstOrNull { it.subjectId == subject.id }
+        val updated = if (existing != null) {
+            state.watches.filterNot { it.subjectId == subject.id }
+        } else {
+            listOf(
+                WatchEntry(
+                    subjectId = subject.id,
+                    title = subject.displayTitle,
+                    cover = subject.coverUrlSmall,
+                    totalEpisodes = state.detailInfo?.episodeCount ?: 0,
+                    updatedAt = System.currentTimeMillis(),
+                )
+            ) + state.watches
+        }
+        state = state.copy(watches = updated.sortedByDescending { it.updatedAt })
+        watchStore.save(state.watches)
+        appendLog(if (existing != null) "取消追番：${subject.displayTitle}" else "已追番：${subject.displayTitle}")
+    }
+
+    /** 从索引详情补全追番记录的封面/集数。 */
+    private fun mergeWatchMeta(detail: SubjectDetail) {
+        val index = state.watches.indexOfFirst { it.subjectId == detail.id }
+        if (index < 0) return
+        val old = state.watches[index]
+        if (old.title == detail.displayTitle &&
+            old.cover == detail.coverUrlSmall &&
+            old.totalEpisodes == detail.episodeCount
+        ) return
+        val updated = state.watches.toMutableList()
+        updated[index] = old.copy(
+            title = detail.displayTitle,
+            cover = detail.coverUrlSmall,
+            totalEpisodes = detail.episodeCount,
+        )
+        state = state.copy(watches = updated)
+        watchStore.save(updated)
+    }
+
+    /** 播放器每 5 秒回报一次进度；没有关联索引条目时直接忽略。 */
+    fun saveProgress(positionMs: Long, durationMs: Long) {
+        val subjectId = state.playSubjectId
+        if (subjectId == 0 || state.playEpisodeIndex < 0) return
+        val existing = state.watches.firstOrNull { it.subjectId == subjectId }
+        val base = existing ?: WatchEntry(
+            subjectId = subjectId,
+            title = state.title.substringBefore(" · "),
+            // 首次记录就带上封面/集数，否则首页卡片会一直没有图
+            cover = state.detail?.coverUrlSmall.orEmpty(),
+            totalEpisodes = state.detailInfo?.episodeCount ?: 0,
+        )
+        val entry = base.copy(
+            ruleName = state.entryRuleName,
+            entrySrc = state.entrySrc,
+            entryName = state.entryName,
+            roadIndex = state.playRoadIndex,
+            episodeIndex = state.playEpisodeIndex,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            totalEpisodes = base.totalEpisodes.takeIf { it > 0 } ?: (state.detailInfo?.episodeCount ?: 0),
+            updatedAt = System.currentTimeMillis(),
+        )
+        val updated = state.watches.filterNot { it.subjectId == subjectId } + entry
+        state = state.copy(watches = updated.sortedByDescending { it.updatedAt })
+        watchStore.save(state.watches)
+    }
+
+    /** 首页「继续观看」：恢复线路后直接跳到上次的集数与进度。 */
+    fun resumeWatch(entry: WatchEntry) {
+        // 只有"追了但还没看过"的条目，进详情页而不是报错
+        if (!entry.hasProgress) {
+            openSubject(
+                CatalogSubject(
+                    id = entry.subjectId,
+                    name = entry.title,
+                    nameCn = entry.title,
+                    images = Images(common = entry.cover),
+                )
+            )
+            return
+        }
+        val rule = state.rules.firstOrNull { it.name == entry.ruleName }
+        if (rule == null) {
+            // 规则没了（被删/导入失败）：回落到自动找源，而不是让用户看到报错
+            appendLog("规则「${entry.ruleName}」已不存在，改为自动找源")
+            startPlayback(
+                state.detail?.takeIf { it.id == entry.subjectId }
+                    ?: CatalogSubject(
+                        id = entry.subjectId,
+                        name = entry.title,
+                        nameCn = entry.title,
+                        images = Images(common = entry.cover),
+                    )
+            )
+            return
+        }
+
+        // 与"搜索进入"走同一套播放管线：直接起播保存的源，同时后台补全候选列表，
+        // 这样源切换条和自动换源对两条入口都成立。
+        val subject = state.detail?.takeIf { it.id == entry.subjectId }
+            ?: CatalogSubject(
+                id = entry.subjectId,
+                name = entry.title,
+                nameCn = entry.title,
+                images = Images(common = entry.cover),
+            )
+
+        autoPlayArmed = true
+        attempting = true // 主线路起播期间，后台搜索的结果不许抢跑
+        triedSources.clear()
+        state = state.copy(
+            screen = Screen.Player,
+            playerBackTo = Screen.Home,
+            detail = subject,
+            playSubjectId = entry.subjectId,
+            title = entry.title,
+            playQuery = entry.title,
+            keyword = entry.title,
+            searchMode = SearchMode.Sources,
+            playPhase = PlayPhase.Starting,
+            playMedia = null,
+            playPageUrl = "",
+            playStartMs = 0,
+            playEpisodeIndex = -1,
+            episodeNumber = entry.episodeIndex + 1,
+            failedSources = emptySet(),
+            autoSwitches = 0,
+            hits = emptyList(),
+            completed = 0,
+            total = 0,
+            error = null,
+            entryRuleName = rule.name,
+            entrySrc = entry.entrySrc,
+            entryName = entry.entryName,
+        )
+
+        // 后台补源：只填 hits，不自动起播（已经在起播保存的源了）
+        if (state.detailInfo?.id != entry.subjectId) loadDetailInfo(entry.subjectId)
+        search(entry.title)
+
+        viewModelScope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                runCatching { engine.chapters(rule, entry.entrySrc) }
+            }
+            outcome.onSuccess { result ->
+                val roads = result.roads.filter { it.urls.isNotEmpty() }
+                if (roads.isEmpty()) {
+                    candidateFailed("${rule.name}：没有可用线路")
+                    return@onSuccess
+                }
+                val road = roads.getOrNull(entry.roadIndex) ?: roads.first()
+                state = state.copy(roads = roads)
+                play(road, entry.episodeIndex.coerceIn(0, (road.urls.size - 1).coerceAtLeast(0)))
+                attempting = false
+            }.onFailure { error ->
+                candidateFailed("${rule.name}：${describe(error)}")
+            }
+        }
+    }
+
+    /** 详情页里"找片源"：用索引标题（中文优先）去并发搜所有源。 */
+    fun searchFromDetail() {
+        val subject = state.detail ?: return
+        state = state.copy(selected = null, keyword = subject.displayTitle)
+        search(subject.displayTitle)
+    }
+
+    // ---------- 播放管线（索引点进去 → 自动找源 → 失败换源） ----------
+
+    /** 记住搜过的词，最多 10 条，搜索页空态时展示。 */
+    fun rememberKeyword(keyword: String) {
+        val k = keyword.trim()
+        if (k.isEmpty()) return
+        val history = (listOf(k) + state.searchHistory.filter { it != k }).take(10)
+        searchPrefs.edit().putString("history", history.joinToString("\u0001")).apply()
+        state = state.copy(searchHistory = history)
+    }
+
+    fun clearSearchHistory() {
+        searchPrefs.edit().remove("history").apply()
+        state = state.copy(searchHistory = emptyList())
+    }
+
+    /** 搜索页：默认只显示有结果的源，失败/空结果折叠。 */
+    fun toggleFailedSources() {
+        state = state.copy(showFailedSources = !state.showFailedSources)
+    }
+    fun updateKeyword(text: String) {
+        state = state.copy(keyword = text, searchMode = SearchMode.Index)
+        onlineJob?.cancel()
+        if (text.length < 2) {
+            state = state.copy(onlineResults = emptyList(), onlineSearching = false)
+            return
+        }
+        // 输入停顿 400ms 再打在线接口，避免每敲一个字都发一次请求
+        onlineJob = viewModelScope.launch {
+            delay(400)
+            state = state.copy(onlineSearching = true)
+            val result = withContext(Dispatchers.IO) { runCatching { catalog.searchSubjects(text) } }
+            state = state.copy(onlineSearching = false)
+            result
+                .onSuccess { state = state.copy(onlineResults = it) }
+                .onFailure { appendLog("在线索引搜索失败：${describe(it)}") }
+        }
+    }
+
+    /**
+     * 点索引条目直接进入播放：先到播放页，再并发找源，第一个可用的立刻起播。
+     *
+     * 用户不需要在搜索页挑源——源的选择被推迟到"播不动"的时候。
+     */
+    fun startPlayback(subject: CatalogSubject) {
+        rememberKeyword(subject.displayTitle)
+        autoPlayArmed = true
+        attempting = false
+        gateCandidate = null
+        triedSources.clear()
+        state = state.copy(
+            screen = Screen.Player,
+            playerBackTo = when (val origin = state.screen) {
+                // 从详情开播：返回目标是"详情从哪来的"（搜索/首页），
+                // 否则 详情(origin=播放) 和 播放(backTo=详情) 会互相指向，形成死循环。
+                Screen.Detail -> state.detailOrigin
+                Screen.Player -> state.playerBackTo
+                else -> origin
+            },
+            detail = subject,
+            playSubjectId = subject.id,
+            title = subject.displayTitle,
+            keyword = subject.displayTitle,
+            searchMode = SearchMode.Sources,
+            playPhase = PlayPhase.Searching,
+            playQuery = subject.displayTitle,
+            playMedia = null,
+            playPageUrl = "",
+            playStartMs = 0,
+            playEpisodeIndex = -1,
+            episodeNumber = 1,
+            failedSources = emptySet(),
+            autoSwitches = 0,
+            hits = emptyList(),
+            completed = 0,
+            total = 0,
+            error = null,
+        )
+        // 播放页信息卡要用到评分/更新集数，这里补齐（已缓存过就不重复请求）
+        if (state.detailInfo?.id != subject.id) loadDetailInfo(subject.id)
+        search(subject.displayTitle)
+    }
+
+    /** 从详情页的「播放」按钮进入同一条管线。 */
+    fun playCurrentSubject() {
+        val subject = state.detail ?: return
+        startPlayback(subject)
+    }
+
+    // ---------- 更新提醒 ----------
+
+    /** 给"源还没更新"的那一集设提醒：之后定时去该站点探测，出现了就通知。 */
+    fun addEpisodeAlert() {
+        val gate = state.episodeGate
+        if (gate == null) {
+            showError("先选一集")
+            return
+        }
+        val rule = gate.rule
+        if (rule == null || gate.entrySrc.isBlank()) {
+            showError("还没有可用的源，无法设提醒")
+            return
+        }
+        val id = System.currentTimeMillis()
+        val alert = EpisodeAlert(
+            id = id,
+            subjectId = state.playSubjectId,
+            title = state.detail?.displayTitle ?: state.title.substringBefore(" · "),
+            cover = state.detail?.coverUrlSmall.orEmpty(),
+            episode = gate.requested,
+            ruleName = gate.ruleName,
+            entrySrc = gate.entrySrc,
+            createdAt = id,
+        )
+        val list = state.alerts
+            .filterNot { it.subjectId == alert.subjectId && it.episode == alert.episode } + alert
+        alertStore.save(list)
+        state = state.copy(alerts = list)
+        appendLog("已设置提醒： 第  集（源出现后通知）")
+    }
+
+    fun removeAlert(id: Long) {
+        val list = state.alerts.filterNot { it.id == id }
+        alertStore.save(list)
+        state = state.copy(alerts = list)
+    }
+
+    /** 点通知进来：直接按那一集开播。 */
+    fun openAlert(id: Long): Boolean {
+        val alert = state.alerts.firstOrNull { it.id == id } ?: return false
+        val subject = CatalogSubject(
+            id = alert.subjectId,
+            name = alert.title,
+            nameCn = alert.title,
+            images = Images(common = alert.cover),
+        )
+        startPlayback(subject)
+        state = state.copy(episodeNumber = alert.episode)
+        return true
+    }
+    /** 源没更新到目标集时：「先看能看的最新一集」。 */
+    fun watchLatestAvailable() {
+        val gate = state.episodeGate ?: return
+        val rule = gate.rule ?: return
+        if (gate.sourceMax <= 0) return
+        state = state.copy(episodeNumber = gate.sourceMax, episodeGate = null, error = null)
+        playRoad(rule, SearchItem(gate.entryName, gate.entrySrc), 0)
+    }
+
+    /** 选集里点到"源未到/未播出"的集数：只展示提示，不切屏。 */
+    fun showGateFor(number: Int) {
+        val sourceMax = state.roads.getOrNull(state.playRoadIndex)?.urls?.size ?: 0
+        val expected = officialAired()
+        val rule = state.rules.firstOrNull { it.name == state.entryRuleName }
+        state = state.copy(
+            episodeGate = EpisodeGate(
+                reason = if (expected > 0 && number > expected) GateReason.NotAired else GateReason.SourceBehind,
+                requested = number,
+                expected = expected,
+                sourceMax = sourceMax,
+                ruleName = state.entryRuleName,
+                entrySrc = state.entrySrc,
+                entryName = state.entryName,
+                rule = rule,
+            ),
+            episodeNumber = number,
+        )
+    }
+
+    fun dismissGate() {
+        state = state.copy(episodeGate = null)
+    }
+    /** 播完自动下一集；已经是最后一集就提示一下。 */
+    fun playNextEpisode() {
+        val road = state.roads.getOrNull(state.playRoadIndex) ?: return
+        val next = state.playEpisodeIndex + 1
+        if (next !in road.urls.indices) {
+            appendLog("已经是最后一集")
+            return
+        }
+        appendLog("自动连播：第  集")
+        play(road, next)
+    }
+    /** 详情页的「选集」：弹集数面板；还没找到源就先自动找。 */
+    fun openEpisodeSheet() {
+        if (state.roads.isNotEmpty()) {
+            state = state.copy(episodeSheet = true, episodeLoading = false)
+            return
+        }
+        state = state.copy(episodeSheet = true, episodeLoading = true)
+        val subject = state.detail ?: return
+        pendingPicker = true
+        val existing = candidates().firstOrNull()
+        if (existing != null) {
+            fillPicker(existing.first, existing.second)
+        } else if (state.hits.isEmpty()) {
+            searchSources(subject.displayTitle)
+        }
+    }
+
+    fun closeEpisodeSheet() {
+        pendingPicker = false
+        state = state.copy(episodeSheet = false, episodeLoading = false)
+    }
+
+    /** 弹层里点某一集：关掉弹层直接播。 */
+    fun pickEpisode(road: Road, index: Int) {
+        state = state.copy(episodeSheet = false, episodeLoading = false)
+        play(road, index)
+    }
+
+    // ---------- 人机验证（Cloudflare 挑战 / 验证码） ----------
+
+    private fun searchUrlFor(rule: AnimeRule, keyword: String): String {
+        val encoded = java.net.URLEncoder.encode(keyword, "UTF-8")
+        val url = rule.searchUrl.replace("@keyword", encoded)
+        return if (url.startsWith("http")) url
+        else rule.baseUrl.trimEnd('/') + "/" + url.trimStart('/')
+    }
+
+    /** 打开验证页：加载刚才被拦的那个搜索地址，让 WebView 去过挑战/填验证码。 */
+    fun startVerify(rule: AnimeRule) {
+        val keyword = state.keyword.ifBlank { state.playQuery }
+        state = state.copy(
+            screen = Screen.Verify,
+            verifyUrl = searchUrlFor(rule, keyword),
+            verifyRuleName = rule.name,
+            verifyDone = false,
+        )
+    }
+
+    fun onVerifyPageLoaded() {
+        state = state.copy(verifyDone = true)
+    }
+
+    /** 页面加载完 → 读 Cookie 存下来 → 用同一条规则重试一次。 */
+    fun finishVerify() {
+        val url = state.verifyUrl
+        if (url.isNotBlank()) {
+            val cookie = runCatching {
+                android.webkit.CookieManager.getInstance().getCookie(url)
+            }.getOrNull()
+            cookieStore.save(url, cookie)
+            appendLog("验证完成：${runCatching { java.net.URI(url).host }.getOrNull()} cookie=${cookie?.take(24).orEmpty()}")
+        }
+        val rule = state.rules.firstOrNull { it.name == state.verifyRuleName }
+        state = state.copy(
+            screen = Screen.Search,
+            verifyUrl = "",
+            verifyRuleName = "",
+            verifyDone = false,
+            searchMode = SearchMode.Sources,
+        )
+        if (rule != null) retryRule(rule)
+    }
+
+    fun cancelVerify() {
+        state = state.copy(screen = Screen.Search, verifyUrl = "", verifyRuleName = "", verifyDone = false)
+    }
+
+    /** 只重试这一条规则，不动其它源的结果。 */
+    private fun retryRule(rule: AnimeRule) {
+        val keyword = state.keyword.ifBlank { state.playQuery }
+        if (keyword.isBlank()) return
+        viewModelScope.launch {
+            val outcome = withContext(Dispatchers.IO) { runCatching { engine.search(rule, keyword) } }
+            val hit = outcome.fold(
+                onSuccess = { result ->
+                    SourceHit(rule = rule, ruleName = rule.name, items = result.items, done = true)
+                },
+                onFailure = { error ->
+                    SourceHit(rule = rule, ruleName = rule.name, error = describe(error), done = true)
+                },
+            )
+            state = state.copy(hits = state.hits.map { if (it.ruleName == hit.ruleName) hit else it })
+            appendLog("重试 ${rule.name}：${hit.items.size} 条${hit.error?.let { "（$it）" }.orEmpty()}")
+        }
+    }
+
+    /** 当前还能尝试的候选（先按标题相似度，再按到达顺序：先到的先播）。 */
+    private fun candidates(): List<Pair<AnimeRule, SearchItem>> {
+        val query = state.playQuery.ifBlank { state.keyword }
+        // 记忆播放源：上一集/上次看这部用的源，排在最前面
+        val preferred = state.watches
+            .firstOrNull { it.subjectId == state.playSubjectId }
+            ?.ruleName
+            .orEmpty()
+
+        data class Scored(val rule: AnimeRule, val item: SearchItem, val score: Int)
+
+        val scored = ArrayList<Scored>()
+        for (hit in state.hits) {
+            if (hit.error != null) continue
+            for (item in hit.items) {
+                val score = titleScore(query, item.name)
+                // 负分 = 判定为不同作品（季数/剧场版标记对不上），直接丢掉：
+                // 宁可"没找到"，也不要播成别的番。
+                if (score >= 0) scored.add(Scored(hit.rule, item, score))
+            }
+        }
+        return scored
+            .sortedWith(
+                compareByDescending<Scored> { it.score }
+                    .thenBy { if (it.rule.name == preferred) 0 else 1 }
+            )
+            .map { it.rule to it.item }
+    }
+
+    /**
+     * 作品版本标记：restart / 第二季 / 剧场版 这些一旦对不上，就不是同一部番。
+     *
+     * 实测踩过的坑：搜「魔法少女育成计划 restart」，源站同时有 2016 年的
+     * 「魔法少女育成计划」（12 集已完结），纯相似度算法会选中老版。
+     */
+    private fun versionTokens(text: String): Set<String> {
+        val t = text.lowercase()
+        val tokens = mutableSetOf<String>()
+        listOf(
+            "restart", "剧场版", "劇場版", "特别篇", "特別篇", "总集篇", "番外",
+            "final season", "season 2", "season 3", "season 4",
+            "2nd season", "3rd season", "4th season",
+        ).forEach { if (t.contains(it)) tokens += it }
+        Regex("第\\s*([2-9]|[一二三四五六七八九])\\s*[期季部]").findAll(t).forEach {
+            tokens += it.value.replace(" ", "")
+        }
+        Regex("\\b(ii|iii|iv)\\b").findAll(t).forEach { tokens += it.value }
+        return tokens
+    }
+
+    /**
+     * 标题相似度。规则：
+     * 1. 归一化后完全相等 → 最高分；
+     * 2. **版本标记必须双向一致**：query 有 restart 而候选没有（或反过来）→ 直接判负，
+     *    避免"同系列不同季"互相顶替；
+     * 3. 其余按前缀 / 包含 / 长度差打分。
+     */
+    private fun titleScore(query: String, candidate: String): Int {
+        val a = query.replace(" ", "").lowercase()
+        val b = candidate.replace(" ", "").lowercase()
+        if (a.isEmpty() || b.isEmpty()) return 0
+        if (a == b) return 1000
+
+        val qaTokens = versionTokens(query)
+        val cbTokens = versionTokens(candidate)
+        if (qaTokens != cbTokens) return -1000
+
+        var prefix = 0
+        while (prefix < a.length && prefix < b.length && a[prefix] == b[prefix]) prefix++
+        val contain = if (a.contains(b) || b.contains(a)) 200 else 0
+        val lengthPenalty = kotlin.math.abs(a.length - b.length) * 3
+        return prefix * 2 + contain + minOf(a.length, b.length) - lengthPenalty
+    }
+
+    /** 播放页下拉刷新：重跑一遍源搜索，不打扰当前播放。 */
+    fun refreshSources() {
+        val query = state.playQuery.ifBlank { state.keyword }
+        if (query.isBlank() || state.busy) return
+        autoPlayArmed = false
+        triedSources.clear()
+        appendLog("手动刷新源")
+        search(query)
+    }
+
+    private fun sourceKey(rule: AnimeRule, item: SearchItem): String = "${rule.name}|${item.src}"
+
+    /** 有一个源返回结果就尝试起播；多路并发时只允许一个 attempt 在飞。 */
+    private fun maybeAutoPlay() {
+        // 选集弹层优先：只取线路，不切屏、不起播
+        if (pendingPicker) {
+            maybeFillPicker()
+            return
+        }
+        if (!autoPlayArmed || attempting || state.playPhase != PlayPhase.Searching) return
+        if (autoPlayJob?.isActive == true) return
+        autoPlayJob = viewModelScope.launch {
+            // 收敛窗口：第一个源返回时不立刻播，等 1.2 秒让更多源到齐，
+            // 否则会拿"只有半张候选表"的状态去选，容易选到同名第一季。
+            if (state.busy) delay(AUTO_PLAY_SETTLE_MS)
+            if (!autoPlayArmed || attempting || state.playPhase != PlayPhase.Searching) return@launch
+            val next = candidates().firstOrNull { (rule, item) -> sourceKey(rule, item) !in triedSources }
+                ?: return@launch
+            attemptPlay(next.first, next.second)
+        }
+    }
+
+    /** 选集弹层：挑一个没试过的源去取线路（不起播）。 */
+    private fun maybeFillPicker() {
+        if (!pendingPicker || state.roads.isNotEmpty()) return
+        val next = candidates().firstOrNull { (rule, item) -> sourceKey(rule, item) !in triedSources }
+            ?: return
+        fillPicker(next.first, next.second)
+    }
+
+    private fun fillPicker(rule: AnimeRule, item: SearchItem) {
+        val key = sourceKey(rule, item)
+        triedSources += key
+        viewModelScope.launch {
+            val started = System.currentTimeMillis()
+            val result = withContext(Dispatchers.IO) { runCatching { engine.chapters(rule, item.src) } }
+            val elapsed = System.currentTimeMillis() - started
+            result.onSuccess { outcome ->
+                val roads = outcome.roads.filter { it.urls.isNotEmpty() }
+                if (roads.isEmpty()) {
+                    markStatus(key, SourceStatus(error = "没有可用线路", latencyMs = elapsed))
+                    maybeFillPicker()
+                    return@onSuccess
+                }
+                markStatus(key, SourceStatus(roads = roads, latencyMs = elapsed))
+                pendingPicker = false
+                state = state.copy(
+                    roads = roads,
+                    entryRuleName = rule.name,
+                    entrySrc = item.src,
+                    entryName = item.name,
+                    episodeLoading = false,
+                    episodeSheet = true,
+                )
+            }.onFailure { error ->
+                markStatus(key, SourceStatus(error = describe(error), latencyMs = elapsed))
+                maybeFillPicker()
+            }
+        }
+    }
+    private fun attemptPlay(rule: AnimeRule, item: SearchItem) {        attempting = true
+        val key = sourceKey(rule, item)
+        triedSources += key
+        state = state.copy(
+            screen = Screen.Player,
+            playPhase = PlayPhase.Starting,
+            entryRuleName = rule.name,
+            entrySrc = item.src,
+            entryName = item.name,
+            error = null,
+            sourceStatus = state.sourceStatus + (key to SourceStatus(probing = true)),
+        )
+        appendLog("尝试源 ${rule.name}：${item.name}")
+        val started = System.currentTimeMillis()
+
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { engine.chapters(rule, item.src) }
+            }
+            val elapsed = System.currentTimeMillis() - started
+            result.onSuccess { outcome ->
+                val roads = outcome.roads.filter { it.urls.isNotEmpty() }
+                if (roads.isEmpty()) {
+                    markStatus(key, SourceStatus(error = "没有可用线路", latencyMs = elapsed))
+                    candidateFailed("${rule.name}：没有可用线路")
+                    return@onSuccess
+                }
+                markStatus(key, SourceStatus(roads = roads, latencyMs = elapsed))
+                val road = roads.first()
+                val index = matchEpisodeIndex(road, state.episodeNumber)
+                if (index == null) {
+                    // 源里没有这一集：记下"最好情况"，继续换下一个源
+                    noteGate(rule, item, road, roads)
+                    candidateFailed("${rule.name}：源只到第 ${road.urls.size} 集")
+                    return@onSuccess
+                }
+                state = state.copy(roads = roads, title = item.name)
+                play(road, index)
+                attempting = false
+            }.onFailure { error ->
+                markStatus(key, SourceStatus(error = describe(error), latencyMs = elapsed))
+                candidateFailed("${rule.name}：${describe(error)}")
+            }
+        }
+    }
+
+    private fun markStatus(key: String, status: SourceStatus) {
+        state = state.copy(sourceStatus = state.sourceStatus + (key to status))
+    }
+
+    /** 面板里展开某个源时按需探测线路，不自动起播。 */
+    fun probeSource(rule: AnimeRule, item: SearchItem) {
+        val key = sourceKey(rule, item)
+        val existing = state.sourceStatus[key]
+        if (existing?.probing == true || existing?.roads?.isNotEmpty() == true) return
+        markStatus(key, SourceStatus(probing = true))
+        viewModelScope.launch {
+            val started = System.currentTimeMillis()
+            val result = withContext(Dispatchers.IO) { runCatching { engine.chapters(rule, item.src) } }
+            val elapsed = System.currentTimeMillis() - started
+            result.onSuccess { outcome ->
+                val roads = outcome.roads.filter { it.urls.isNotEmpty() }
+                markStatus(
+                    key,
+                    if (roads.isEmpty()) SourceStatus(error = "没有可用线路", latencyMs = elapsed)
+                    else SourceStatus(roads = roads, latencyMs = elapsed),
+                )
+            }.onFailure { markStatus(key, SourceStatus(error = describe(it), latencyMs = elapsed)) }
+        }
+    }
+
+    /** 切到指定源的指定线路，保持当前集数。 */
+    fun playRoad(rule: AnimeRule, item: SearchItem, roadIndex: Int) {
+        autoPlayArmed = true
+        attempting = false
+        val key = sourceKey(rule, item)
+        val cached = state.sourceStatus[key]?.roads.orEmpty()
+
+        fun start(roads: List<Road>) {
+            val road = roads.getOrNull(roadIndex) ?: roads.first()
+            state = state.copy(
+                roads = roads,
+                entryRuleName = rule.name,
+                entrySrc = item.src,
+                entryName = item.name,
+                failedSources = emptySet(),
+                autoSwitches = 0,
+                error = null,
+            )
+            val index = matchEpisodeIndex(road, state.episodeNumber)
+            if (index == null) {
+                state = state.copy(
+                    episodeGate = buildGate(rule, item, road.urls.size),
+                    playPhase = PlayPhase.Failed,
+                    error = null,
+                    playMedia = null,
+                )
+                return
+            }
+            play(road, index)
+        }
+
+        if (cached.isNotEmpty()) {
+            start(cached)
+            return
+        }
+        markStatus(key, SourceStatus(probing = true))
+        viewModelScope.launch {
+            val started = System.currentTimeMillis()
+            val result = withContext(Dispatchers.IO) { runCatching { engine.chapters(rule, item.src) } }
+            val elapsed = System.currentTimeMillis() - started
+            result.onSuccess { outcome ->
+                val roads = outcome.roads.filter { it.urls.isNotEmpty() }
+                if (roads.isEmpty()) {
+                    markStatus(key, SourceStatus(error = "没有可用线路", latencyMs = elapsed))
+                } else {
+                    markStatus(key, SourceStatus(roads = roads, latencyMs = elapsed))
+                    start(roads)
+                }
+            }.onFailure { markStatus(key, SourceStatus(error = describe(it), latencyMs = elapsed)) }
+        }
+    }
+
+    private fun candidateFailed(reason: String) {
+        attempting = false
+        appendLog("换源：$reason")
+        state = state.copy(
+            failedSources = state.failedSources + state.entryRuleName,
+            playPhase = PlayPhase.Searching,
+            playMedia = null,
+            playPageUrl = "",
+        )
+        if (state.autoSwitches >= MAX_AUTO_SWITCH) {
+            autoPlayArmed = false
+            state = state.copy(
+                screen = Screen.Player,
+                playPhase = PlayPhase.Failed,
+                error = if (gateCandidate == null) "已尝试多个源都失败：$reason" else null,
+                episodeGate = gateCandidate,
+            )
+            return
+        }
+        state = state.copy(autoSwitches = state.autoSwitches + 1)
+        maybeAutoPlay()
+        // 没有候选了但搜索还在跑：等下一个源返回时由 search() 继续触发
+        if (state.playPhase == PlayPhase.Searching && candidates().none {
+                (rule, item) -> sourceKey(rule, item) !in triedSources
+            } && !state.busy
+        ) {
+            autoPlayArmed = false
+            state = state.copy(
+                screen = Screen.Player,
+                playPhase = PlayPhase.Failed,
+                // 全部源都缺这一集 → 展示"源还没更新"，而不是笼统的失败
+                error = if (gateCandidate == null) "没有可用的源：$reason" else null,
+                episodeGate = gateCandidate,
+            )
+        }
+    }
+
+    /** 记录"最接近"的集数缺口：源最多到第几集，用于给用户提示。 */
+    private fun noteGate(rule: AnimeRule, item: SearchItem, road: Road, roads: List<Road>) {
+        val sourceMax = roads.maxOfOrNull { it.urls.size } ?: road.urls.size
+        val previous = gateCandidate
+        if (previous == null || sourceMax > previous.sourceMax) {
+            gateCandidate = buildGate(rule, item, sourceMax)
+        }
+    }
+
+    /** 官方进度：优先 eps（已播），没给就用总集数，都没有当未知（0）。 */
+    private fun officialAired(): Int {
+        val eps = state.detailInfo?.eps ?: 0
+        if (eps > 0) return eps
+        return state.detailInfo?.totalEpisodes ?: 0
+    }
+
+    private fun buildGate(rule: AnimeRule, item: SearchItem, sourceMax: Int): EpisodeGate {
+        val requested = state.episodeNumber
+        val expected = officialAired()
+        return EpisodeGate(
+            reason = if (expected > 0 && requested > expected) GateReason.NotAired else GateReason.SourceBehind,
+            requested = requested,
+            expected = expected,
+            sourceMax = sourceMax,
+            ruleName = rule.name,
+            entrySrc = item.src,
+            entryName = item.name,
+            rule = rule,
+        )
+    }
+
+    /** 播放器报错（CDN 连不上、编码不支持等）→ 自动换下一个源。 */
+    fun onPlaybackError(message: String) {
+        appendLog("播放出错：$message")
+        // 记到源状态里，面板上会显示成 ✗ + 原因
+        if (state.entryRuleName.isNotEmpty()) {
+            val key = "${state.entryRuleName}|${state.entrySrc}"
+            val prev = state.sourceStatus[key] ?: SourceStatus()
+            markStatus(key, prev.copy(probing = false, error = message))
+        }
+        if (!autoPlayArmed) {
+            state = state.copy(playPhase = PlayPhase.Failed, error = message, playMedia = null)
+            return
+        }
+        candidateFailed(message)
+    }
+
+    /** 从播放页回详情看简介/标签，不清空已找到的源。 */
+    /** 全屏播放：由界面切换横竖屏与系统栏，这里只记状态。 */
+    fun setFullscreen(enabled: Boolean) {
+        state = state.copy(playerFullscreen = enabled)
+    }
+
+    /** 播放过程中记录位置：从播放页跳详情再回来，能接着看而不是从头。 */
+    fun updatePlayPosition(positionMs: Long) {
+        if (positionMs > 0 && state.playMedia != null) {
+            state = state.copy(playStartMs = positionMs)
+        }
+    }
+    fun openDetailFromPlayer() {
+        val subject = state.detail ?: return
+        // 记下来源：从播放页进的详情，返回时要回播放页，而不是最初的首页/搜索
+        state = state.copy(screen = Screen.Detail, detailOrigin = Screen.Player, navForward = true)
+        if (state.detailInfo == null) loadDetailInfo(subject.id)
+    }
+
+    /** 用户主动换源。 */
+    fun switchSource(rule: AnimeRule, item: SearchItem) {
+        autoPlayArmed = true
+        attempting = false
+        state = state.copy(autoSwitches = 0, failedSources = emptySet(), error = null)
+        attemptPlay(rule, item)
+    }
+
+    /** 集数对齐：换源时按"第 N 集"找，而不是直接用索引。 */
+    private fun matchEpisodeIndex(road: Road, number: Int): Int? {
+        road.names.forEachIndexed { index, name ->
+            if (parseEpisodeNumber(name) == number) return index
+        }
+        // 没有任何集名时按顺序推断，但必须确认线路里真有这么多集；
+        // 这里**不能**回退到最后集，否则第 5 集会静默播成第 4 集。
+        if (road.names.all { it.isNullOrBlank() }) {
+            return (number - 1).takeIf { it in road.urls.indices }
+        }
+        return null
+    }
+
+    private fun parseEpisodeNumber(name: String?): Int? =
+        name?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
+
+    // ---------- 规则 ----------
+
+    fun importRules(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            showError("内容为空")
+            return
+        }
+
+        // 支持三种格式：单个对象、对象数组、NDJSON（每行一条，我们导出的 rules.ndjson 就是这种）
+        val elements: List<JsonElement> = runCatching {
+            when (val e = Json.parseToJsonElement(trimmed)) {
+                is JsonArray -> e.toList()
+                else -> listOf(e)
+            }
+        }.getOrElse {
+            trimmed.lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("{") || it.startsWith("[") }
+                .flatMap { line ->
+                    runCatching { Json.parseToJsonElement(line) }.getOrNull()
+                        ?.let { el -> if (el is JsonArray) el.toList() else listOf(el) }
+                        .orEmpty()
+                }
+                .toList()
+        }
+
+        if (elements.isEmpty()) {
+            showError("没有解析到规则（不是有效的 JSON / NDJSON）")
+            return
+        }
+
+        val rules = try {
+            if (elements.size == 1 && Css1Converter.looksLikeCss1(elements.first())) {
+                importCss1(elements.first())
+            } else {
+                elements.mapNotNull { el ->
+                    runCatching { RuleJson.decodeFromJsonElement(AnimeRule.serializer(), el) }.getOrNull()
+                }
+            }
+        } catch (e: Exception) {
+            showError("规则解析失败: ${e.message}")
+            return
+        }
+
+        if (rules.isEmpty()) {
+            showError("解析到 ${elements.size} 条，但没有一条可用")
+            return
+        }
+        state = state.copy(rules = mergeRules(state.rules, rules), error = null)
+        appendLog("导入 ${rules.size} 条规则（共 ${state.rules.size} 条）")
+        persist()
+    }
+
+    /**
+     * CSS1 规则包（Kazumi Hub / 番遇的 css1.json）直接粘贴导入。
+     *
+     * 转换在 core 里做：CSS 选择器翻译成 XPath，播放地址仍交给 WebView 嗅探，
+     * 所以不需要移植他们的 `matchVideo` 提取链。
+     */
+    private fun importCss1(element: JsonElement): List<AnimeRule> {
+        val outcome = Css1Converter.convert(element, state.rules.map { it.name }.toSet())
+        outcome.skipped.take(5).forEach { appendLog("CSS1 跳过：$it") }
+        outcome.notes.take(8).forEach(::appendLog)
+        appendLog("CSS1 规则包：${outcome.rules.size} 条可导入，${outcome.skipped.size} 条跳过")
+        return outcome.rules
+    }
+
+    /** 同名的新规则覆盖旧规则：规则包更新后必须真的生效。 */
+    private fun mergeRules(existing: List<AnimeRule>, incoming: List<AnimeRule>): List<AnimeRule> =
+        (existing + incoming).associateBy { it.name }.values.toList()
+
+    fun addDemoRule() = importRules(DEMO_RULE)
+
+    /**
+     * 从规则源导入。
+     *
+     * 只拉 `index.json` 里列出的规则（仓库用 deprecated 标记下架的不会进来），
+     * 逐条失败不影响整体；全部失败才报错。
+     */
+    fun importRuleRepo() {
+        if (state.busy) return
+        state = state.copy(busy = true, error = null)
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { fetchRepoRules() } }
+            state = state.copy(busy = false)
+            result.onSuccess { (rules, source) ->
+                state = state.copy(rules = mergeRules(state.rules, rules))
+                appendLog("规则源 $source：导入 ${rules.size} 条")
+                persist()
+            }.onFailure { showError("规则源导入失败: ${it.message}") }
+        }
+    }
+
+    private fun fetchRepoRules(): Pair<List<AnimeRule>, String> {
+        var lastError: Throwable? = null
+        for (base in RULE_REPO_MIRRORS) {
+            val attempt = runCatching {
+                val indexText = fetchText(base + "index.json", "")
+                val names = Json.parseToJsonElement(indexText).jsonArray
+                    .mapNotNull { element ->
+                        element.jsonObject["name"]?.jsonPrimitive?.contentOrNull
+                    }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+
+                val rules = ArrayList<AnimeRule>()
+                for (name in names) {
+                    val text = runCatching { fetchText(base + name + ".json", "") }.getOrNull() ?: continue
+                    runCatching { parseRule(text) }.getOrNull()?.let { rules += it }
+                }
+                if (rules.isEmpty()) error("索引里没有可用规则")
+                rules to base.substringAfter("//").substringBefore("/")
+            }
+            attempt.onSuccess { return it }
+            lastError = attempt.exceptionOrNull()
+        }
+        throw lastError ?: IllegalStateException("所有镜像都不可用")
+    }
+
+    fun selectRule(rule: AnimeRule) {
+        state = state.copy(
+            selected = rule,
+            screen = Screen.Search,
+            hits = emptyList(),
+            roads = emptyList(),
+            error = null,
+        )
+    }
+
+    /** 不指定源，搜索全部规则。 */
+    fun searchAll() {
+        state = state.copy(
+            selected = null,
+            screen = Screen.Search,
+            hits = emptyList(),
+            completed = 0,
+            total = 0,
+            error = null,
+        )
+    }
+
+    // ---------- 搜索 / 选集 ----------
+
+    /**
+     * 并发搜索。
+     *
+     * - 指定了源就只搜那一个（调试单条规则用），否则搜全部；
+     * - 并发度固定 4，避免一次打十几个站点被风控；
+     * - 每个源完成就立刻回填 UI，用户不用等最慢的那个；
+     * - 不去重，失败/空结果原地展示。
+     */
+    fun search(keyword: String) {
+        if (keyword.isBlank()) return
+        val rules = state.selected?.let { listOf(it) } ?: state.rules
+        if (rules.isEmpty()) {
+            showError("先导入规则")
+            return
+        }
+
+        state = state.copy(
+            keyword = keyword,
+            busy = true,
+            error = null,
+            searchMode = SearchMode.Sources,
+            hits = rules.map { SourceHit(rule = it, ruleName = it.name, done = false) },
+            completed = 0,
+            total = rules.size,
+        )
+        appendLog("搜索「$keyword」开始：${rules.size} 个源（并发 4）")
+
+        viewModelScope.launch {
+            val gate = Semaphore(4)
+            rules.forEach { rule ->
+                launch {
+                    gate.withPermit {
+                        val outcome = withContext(Dispatchers.IO) {
+                            runCatching { engine.search(rule, keyword) }
+                        }
+                        val hit = outcome.fold(
+                            onSuccess = { result ->
+                                SourceHit(
+                                    rule = rule,
+                                    ruleName = rule.name,
+                                    items = result.items,
+                                    done = true,
+                                )
+                            },
+                            onFailure = { error ->
+                                SourceHit(
+                                    rule = rule,
+                                    ruleName = rule.name,
+                                    error = describe(error),
+                                    done = true,
+                                )
+                            },
+                        )
+                        state = state.copy(
+                            hits = state.hits.map { if (it.ruleName == hit.ruleName) hit else it },
+                            completed = state.completed + 1,
+                        )
+                        // 播放管线：来了一个能用的源就试着起播
+                        maybeAutoPlay()
+                        if (state.completed >= state.total) {
+                            state = state.copy(busy = false)
+                            val ok = state.hits.count { it.done && it.error == null && it.items.isNotEmpty() }
+                            appendLog("搜索「$keyword」完成：$ok/${state.total} 个源有结果")
+                            maybeAutoPlay()
+                            // 有结果但都被版本标记筛掉：说清楚，别让用户干等
+                            if (autoPlayArmed && state.playPhase == PlayPhase.Searching && candidates().isEmpty()) {
+                                autoPlayArmed = false
+                                state = state.copy(
+                                    screen = Screen.Player,
+                                    playPhase = PlayPhase.Failed,
+                                    error = "没有标题对得上的源（可能搜到的是其它季/剧场版），可以手动换源",
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** 搜索页「直接搜片源」：不自动起播，只把结果列出来。 */
+    fun searchSources(keyword: String) {
+        rememberKeyword(keyword)
+        autoPlayArmed = false
+        attempting = false
+        triedSources.clear()
+        search(keyword)
+    }
+
+    fun openChapters(rule: AnimeRule, item: SearchItem) {
+        state = state.copy(busy = true, error = null)
+        viewModelScope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { engine.chapters(rule, item.src) }
+            }
+            state = state.copy(busy = false)
+            result.onSuccess { outcome ->
+                appendLog("「${item.name}」：${outcome.roads.size} 条线路")
+                outcome.diagnostics.forEach(::appendLog)
+                state = state.copy(
+                    roads = outcome.roads,
+                    title = item.name,
+                    screen = Screen.Chapters,
+                    playSubjectId = state.detail?.id ?: 0,
+                    entryRuleName = rule.name,
+                    entrySrc = item.src,
+                    entryName = item.name,
+                )
+            }.onFailure { showError(it.message ?: it.toString()) }
+        }
+    }
+
+    /** 把异常翻译成用户能理解的一句话。 */
+    private fun describe(error: Throwable): String = when (error) {
+        is java.net.UnknownHostException -> "域名解析失败"
+        is java.net.SocketTimeoutException -> "连接超时"
+        is javax.net.ssl.SSLHandshakeException -> "证书/SSL 错误"
+        is javax.net.ssl.SSLException -> "SSL 协议错误"
+        is java.net.ConnectException -> "连接被拒绝"
+        is java.net.SocketException -> "连接被重置"
+        is com.dmanime.rules.error.HttpStatusException -> "HTTP ${error.status}"
+        is com.dmanime.rules.error.CaptchaRequiredException -> "需要验证码"
+        is com.dmanime.rules.error.RuleFormatException -> "规则无效：${error.message?.take(40)}"
+        else -> error.message?.take(60) ?: error.javaClass.simpleName
+    }
+
+    fun play(road: Road, index: Int) {
+        gateCandidate = null
+        state = state.copy(episodeGate = null)
+        val url = road.urls.getOrNull(index) ?: return
+        val episode = road.names.getOrNull(index) ?: "第${index + 1}集"
+        state = state.copy(
+            screen = Screen.Player,
+            title = "${state.title.substringBefore(" · ")} · $episode",
+            playPageUrl = url,
+            playMedia = null,
+            playRoadIndex = state.roads.indexOf(road).coerceAtLeast(0),
+            playEpisodeIndex = index,
+            playStartMs = resumePositionFor(index),
+            episodeNumber = parseEpisodeNumber(episode) ?: (index + 1),
+            playPhase = PlayPhase.Starting,
+        )
+        appendLog("打开播放页: $url")
+    }
+
+    /**
+     * 该集的上次播放位置。
+     *
+     * 只对"最后一次看的那一集"生效（追番记录按番剧存一条），
+     * 并且过滤掉太短（<15 秒，多半是误点）和接近片尾（>95%，视为看完）的情况。
+     */
+    private fun resumePositionFor(episodeIndex: Int): Long {
+        val subjectId = state.playSubjectId
+        if (subjectId == 0 || episodeIndex < 0) return 0
+        val entry = state.watches.firstOrNull { it.subjectId == subjectId } ?: return 0
+        if (entry.episodeIndex != episodeIndex) return 0
+        if (entry.positionMs < 15_000) return 0
+        if (entry.durationMs > 0 && entry.positionMs > entry.durationMs * 0.95) return 0
+        return entry.positionMs
+    }
+
+    /** 调试入口：跳过规则，直接打开一个播放页，用于单独验证嗅探链路。 */
+    fun playDebugUrl(url: String) {
+        state = state.copy(
+            screen = Screen.Player,
+            title = "调试播放",
+            playPageUrl = url,
+            playMedia = null,
+            error = null,
+        )
+        appendLog("调试播放页: $url")
+    }
+
+    /** 调试入口：直接触发一次搜索（可指定源名），用于自动化验证。 */
+    fun debugSearch(ruleName: String?, keyword: String) {
+        if (keyword.isBlank()) return
+        val rule = ruleName?.let { name ->
+            state.rules.firstOrNull { it.name.equals(name, ignoreCase = true) }
+        }
+        state = state.copy(selected = rule, screen = Screen.Search, navForward = true)
+        search(keyword)
+    }
+
+    // ---------- 嗅探 ----------
+
+    fun onSniffCandidate(url: String) {
+        val current = state
+        if (current.playMedia != null) return
+
+        val candidate = SniffCandidate(url, MediaUrls.classify(url))
+        appendLog("嗅探到 ${candidate.kind}: $url")
+        if (candidate.kind == MediaKind.UNKNOWN) return
+
+        val referer = current.playPageUrl
+        viewModelScope.launch {
+            val media = withContext(Dispatchers.IO) {
+                runCatching {
+                    SniffResolver(fetch = { fetchText(it, referer) })
+                        .resolve(candidate, referer = referer, userAgent = DEFAULT_UA)
+                }.getOrNull()
+            }
+            if (media != null && state.playMedia == null) {
+                state = state.copy(
+                    playMedia = PlayMedia(
+                        url = media.url,
+                        headers = media.headers,
+                        note = if (media.encrypted) "AES-128 加密流，由播放器解密" else "",
+                    ),
+                    playPhase = PlayPhase.Playing,
+                )
+                appendLog("开始播放: ${media.url}")
+            }
+        }
+    }
+
+    fun appendLog(message: String) {
+        Log.d("dmanime", message)
+        state = state.copy(logs = (state.logs + message).takeLast(100))
+    }
+
+    fun showError(message: String) {
+        Log.e("dmanime", message)
+        state = state.copy(error = message)
+        appendLog("错误: $message")
+    }
+
+    fun back() {
+        state = state.copy(navForward = false)
+        state = when (state.screen) {
+            // 返回回到"进入播放前的那一屏"：详情/首页/搜索，而不是选集
+            Screen.Player -> state.copy(
+                screen = state.playerBackTo,
+                playPageUrl = "",
+                playMedia = null,
+                playPhase = PlayPhase.Idle,
+                playerFullscreen = false,
+                // 回搜索页时切回索引模式，别停在"原始搜源"那个调试界面
+                searchMode = if (state.playerBackTo == Screen.Search) SearchMode.Index else state.searchMode,
+            )
+
+            Screen.Chapters -> state.copy(
+                screen = if (state.detail != null) Screen.Detail else Screen.Search,
+                roads = emptyList(),
+            )
+
+            Screen.Detail -> if (state.detailOrigin == Screen.Player) {
+                // 从播放页来看详情：返回播放页，保留播放状态和已找到的源
+                state.copy(screen = Screen.Player)
+            } else {
+                state.copy(
+                    screen = state.detailOrigin,
+                    detail = null,
+                    hits = emptyList(),
+                )
+            }
+
+            else -> state
+        }
+    }
+
+    // ---------- 内部 ----------
+
+    private fun fetchText(url: String, referer: String): String {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 10_000
+            readTimeout = 10_000
+            setRequestProperty("User-Agent", DEFAULT_UA)
+            if (referer.isNotBlank()) setRequestProperty("Referer", referer)
+        }
+        return connection.inputStream.bufferedReader().use { it.readText() }.also { connection.disconnect() }
+    }
+
+    private fun persist() {
+        runCatching { ruleFile.writeText(state.rules.joinToString("\n") { encodeRule(it) }) }
+    }
+
+    private fun loadRules() {
+        if (!ruleFile.exists()) return
+        val text = ruleFile.readText()
+        if (text.isBlank()) return
+
+        // 同时支持两种落盘格式：整块 JSON（单对象/数组）与 NDJSON（一行一条）。
+        // 手写/调试时很容易把美化过的 JSON 直接塞进来，不应该因此丢规则。
+        val wholeFile: List<AnimeRule>? = runCatching {
+            when (val element = Json.parseToJsonElement(text)) {
+                is JsonArray -> element.map { RuleJson.decodeFromJsonElement(AnimeRule.serializer(), it) }
+                is JsonObject -> listOf(RuleJson.decodeFromJsonElement(AnimeRule.serializer(), element))
+                else -> emptyList<AnimeRule>()
+            }
+        }.getOrNull()
+
+        val rules = wholeFile ?: text.split('\n')
+            .map { line -> line.trim() }
+            .filter { line -> line.isNotEmpty() }
+            .mapNotNull { line -> runCatching { parseRule(line) }.getOrNull() }
+
+        state = state.copy(rules = rules)
+    }
+}

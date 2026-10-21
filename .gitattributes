@@ -1,0 +1,13 @@
+# 统一行尾，避免 Windows 上反复提示 CRLF
+* text=auto eol=lf
+
+# 二进制资源不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.apk binary
+*.jks binary
+*.keystore binary
+*.ttf binary
+*.mp4 binary

@@ -1,0 +1,19 @@
+.scratch/
+.probe
+*.log
+.gradle/
+.kotlin/
+build/
+local.properties
+tools/mock-site/www/seg*.ts
+tools/mock-site/www/local.m3u8
+
+# 构建产物与签名：不进仓库
+dist/*.apk
+*.jks
+*.keystore
+
+# 工具/IDE
+.idea/
+*.iml
+.workbuddy/

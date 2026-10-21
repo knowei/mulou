@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 番仓：一个"仓库盒"里放着播放键 —— 索引（仓）+ 播放。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 盒子投影 -->
+    <path
+        android:fillColor="#33000000"
+        android:pathData="M38,30h34a12,12 0 0 1 12,12v34a12,12 0 0 1 -12,12h-34a12,12 0 0 1 -12,-12v-34a12,12 0 0 1 12,-12z" />
+
+    <!-- 盒体 -->
+    <path
+        android:fillColor="#FFF7F5FF"
+        android:pathData="M36,26h32a12,12 0 0 1 12,12v32a12,12 0 0 1 -12,12h-32a12,12 0 0 1 -12,-12v-32a12,12 0 0 1 12,-12z" />
+
+    <!-- 盒盖（顶部横条） -->
+    <path
+        android:fillColor="#FFD9CEFF"
+        android:pathData="M24,34h56v10h-56z" />
+
+    <!-- 播放键 -->
+    <path
+        android:fillColor="#FF5B3BE0"
+        android:pathData="M47,47 L68,59 L47,71 Z" />
+</vector>

@@ -1,0 +1,41 @@
+[
+  {
+    "weekday": {"en": "Mon", "cn": "星期一", "ja": "月耀日", "id": 1},
+    "items": [
+      {
+        "id": 390200,
+        "name": "葬送のフリーレン",
+        "name_cn": "葬送的芙莉莲",
+        "summary": "魔王讨伐之后的故事。",
+        "air_date": "2026-10-05",
+        "air_weekday": 1,
+        "rating": {"score": 9.2},
+        "images": {"large": "http://lain.bgm.tv/pic/cover/l/1.jpg", "common": "http://lain.bgm.tv/pic/cover/c/1.jpg"}
+      },
+      {
+        "id": 390201,
+        "name": "名もなき作品",
+        "name_cn": "",
+        "summary": "",
+        "air_date": "2026-10-06",
+        "air_weekday": 1,
+        "rating": {"score": 0}
+      }
+    ]
+  },
+  {
+    "weekday": {"en": "Fri", "cn": "星期五", "ja": "金耀日", "id": 5},
+    "items": [
+      {
+        "id": 400001,
+        "name": "薬屋のひとりごと",
+        "name_cn": "药屋少女的呢喃",
+        "summary": "后宫推理。",
+        "air_date": "2026-10-09",
+        "air_weekday": 5,
+        "rating": {"score": 8.6},
+        "images": {"large": "http://lain.bgm.tv/pic/cover/l/2.jpg"}
+      }
+    ]
+  }
+]

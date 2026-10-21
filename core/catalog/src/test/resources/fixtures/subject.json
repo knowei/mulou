@@ -1,0 +1,18 @@
+{
+  "id": 390200,
+  "name": "葬送のフリーレン",
+  "name_cn": "葬送的芙莉莲",
+  "summary": "魔王讨伐之后，精灵魔法使芙莉莲踏上旅途。",
+  "air_date": "2023-09-29",
+  "eps": 28,
+  "total_episodes": 28,
+  "platform": "TV",
+  "rating": {"score": 9.2, "total": 51234},
+  "images": {"large": "http://lain.bgm.tv/pic/cover/l/1.jpg"},
+  "tags": [
+    {"name": "奇幻", "count": 1200},
+    {"name": "冒险", "count": 800},
+    {"name": "治愈", "count": 640}
+  ],
+  "collection": {"wish": 1000, "collect": 20000, "doing": 3000, "on_hold": 200, "dropped": 100}
+}

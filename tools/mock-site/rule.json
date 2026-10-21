@@ -1,0 +1,13 @@
+{
+  "api": "9",
+  "type": "anime",
+  "name": "本地 Mock 站",
+  "version": "1.0",
+  "baseURL": "http://127.0.0.1:8000/",
+  "searchURL": "http://127.0.0.1:8000/search.html?wd=@keyword",
+  "searchList": "//li[@class='item']",
+  "searchName": ".//a",
+  "searchResult": ".//a",
+  "chapterRoads": "//ul[@class='road']",
+  "chapterResult": ".//a"
+}

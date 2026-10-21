@@ -1,0 +1,17 @@
+[
+  {
+    "weekday": {"en": "Mon", "cn": "星期一", "ja": "月耀日", "id": 1},
+    "items": [
+      {
+        "id": 1,
+        "name": "作品A",
+        "name_cn": null,
+        "summary": null,
+        "air_date": "2026-10-05",
+        "air_weekday": 1,
+        "rating": null,
+        "images": null
+      }
+    ]
+  }
+]

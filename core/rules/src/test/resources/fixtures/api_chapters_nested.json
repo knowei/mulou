@@ -1,0 +1,9 @@
+{
+  "data": {
+    "slug": "abc",
+    "playSources": [
+      {"name": "线路A", "episodes": [{"name": "第1集", "url": "11"}, {"name": "第2集", "url": "12"}]},
+      {"name": "线路B", "episodes": [{"name": "正片", "url": "21"}]}
+    ]
+  }
+}

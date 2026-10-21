@@ -1,0 +1,93 @@
+{
+  "_comment": "规则模板（自撰，占位符不代表任何真实站点）。字段与 Kazumi 的 JSON 规则 schema 对齐，便于直接导入/导出社区规则。",
+  "api": "9",
+  "type": "anime",
+  "name": "ExampleSite",
+  "version": "1.0.0",
+
+  "baseURL": "https://example.com/",
+
+  "_comment_modes": "searchMode / chapterMode 可独立取 xpath 或 api，允许混搭",
+  "searchMode": "xpath",
+  "chapterMode": "xpath",
+
+  "_comment_flags": "useWebview=用 WebView 嗅探；useNativePlayer=用内置播放器；useLegacyParser=兼容旧解析器；adBlocker=过滤 HLS 广告分片",
+  "useWebview": true,
+  "useNativePlayer": true,
+  "usePost": false,
+  "useLegacyParser": false,
+  "adBlocker": false,
+  "muliSources": true,
+
+  "_comment_http": "空字符串表示不覆盖；referer 常被媒体服务器校验，务必在播放器 DataSource 上透传",
+  "userAgent": "",
+  "referer": "",
+
+  "_comment_xpath": "XPath 模式的 6 个字段：搜索页 → 条目 → 名称/链接；详情或播放页 → 线路 → 剧集",
+  "searchURL": "https://example.com/search?q=@keyword",
+  "searchList": "//ul[@id='result']//li",
+  "searchName": "//h3/a/text()",
+  "searchResult": "//h3/a/@href",
+  "chapterRoads": "//div[@class='play-list']",
+  "chapterResult": "//ul/li/a",
+
+  "_comment_api_search": "API 模式：method/url/query/body + 受限 JSONPath（仅 $.a.b、[*]、[0]、$['k']）",
+  "searchApiConfig": {
+    "request": {
+      "method": "GET",
+      "url": "https://example.com/api/search",
+      "query": { "q": "@keyword", "page": 1 },
+      "headers": { "Referer": "https://example.com/" },
+      "body": { "type": "none", "content": {} }
+    },
+    "listPath": "$.data.list[*]",
+    "namePath": "$.title",
+    "sourcePath": "$.id",
+    "sourceTemplate": "https://example.com/detail/@source"
+  },
+
+  "_comment_api_chapter": "format=nested 或 delimited（MacCMS: $$$ 分线路、# 分集、$ 分名称/地址）",
+  "chapterApiConfig": {
+    "request": {
+      "method": "GET",
+      "url": "https://example.com/api/detail/@source",
+      "query": {},
+      "headers": {},
+      "body": { "type": "none", "content": {} }
+    },
+    "format": "nested",
+    "roadsPath": "$.data.playSources[*]",
+    "roadNamePath": "$.name",
+    "episodesPath": "$.episodes[*]",
+    "episodeNamePath": "$.name",
+    "episodeUrlPath": "",
+    "variables": { "slug": "$.data.slug" },
+    "episodePage": {
+      "url": "https://example.com/watch/@slug",
+      "query": { "line": "@roadIndex", "ep": "@episodeIndex" }
+    },
+    "delimited": {
+      "roadNamesPath": "$.list[0].vod_play_from",
+      "roadEpisodesPath": "$.list[0].vod_play_url",
+      "roadSeparator": "$$$",
+      "episodeSeparator": "#",
+      "nameUrlSeparator": "$"
+    }
+  },
+
+  "_comment_anticrawler": "命中验证页（cf-mitigated: challenge / 403 / 429 / 503 / 指定文本）→ 弹 WebView 让用户处理 → 回填 Cookie → 重试一次",
+  "antiCrawlerConfig": {
+    "enabled": false,
+    "detect": {
+      "type": "regex",
+      "value": "(cf-challenge|Just a moment|验证码)"
+    },
+    "captchaType": 1,
+    "captchaImage": "//img[@id='captcha']",
+    "captchaInput": "//input[@name='code']",
+    "captchaButton": "//button[@type='submit']",
+    "captchaDetectType": 1,
+    "captchaDetectValue": "",
+    "captchaScript": ""
+  }
+}
