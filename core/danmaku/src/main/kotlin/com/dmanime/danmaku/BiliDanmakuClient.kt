@@ -97,6 +97,69 @@ class BiliDanmakuClient(
         }
     }
 
+    // ---------------- UGC（用户上传） ----------------
+
+    /**
+     * 在 UGC 区按标题搜视频。
+     *
+     * 番剧库没有的片子（未引进、国漫、冷门番）在 UGC 区常有搬运：UP 主把一个合集
+     * 切成若干分 P，每个分 P 就是一集，各自带弹幕库。这条路不需要任何凭证。
+     */
+    fun searchUgc(keyword: String): List<UgcVideo> {
+        val trimmed = keyword.trim()
+        if (trimmed.isEmpty()) return emptyList()
+        val key = mixinKey() ?: return emptyList()
+        val params = BiliWbi.sign(
+            mapOf(
+                "search_type" to "video",
+                "keyword" to trimmed,
+                "page" to "1",
+            ),
+            nowSeconds(),
+            key,
+        )
+        val url = "https://api.bilibili.com/x/web-interface/wbi/search/type?" +
+            params.entries.joinToString("&") { (k, v) -> "$k=${encodeComponent(v)}" }
+        val data = getJson(url)["data"]?.jsonObject ?: return emptyList()
+        val result = data["result"] as? JsonArray ?: return emptyList()
+
+        return result.mapNotNull { element ->
+            val obj = element as? JsonObject ?: return@mapNotNull null
+            val bvid = obj.string("bvid")
+            if (bvid.isBlank()) return@mapNotNull null
+            UgcVideo(
+                bvid = bvid,
+                title = stripTags(obj.string("title")),
+                play = obj["play"]?.jsonPrimitive?.intOrNull ?: 0,
+                durationSeconds = parseDuration(obj.string("duration")),
+            )
+        }
+    }
+
+    /** 取一个视频的分 P 列表；每个 P 当成一集，它的 cid 就是这一集的弹幕库。 */
+    fun pages(bvid: String): List<DanmakuEpisode> {
+        if (bvid.isBlank()) return emptyList()
+        val data = getJson("https://api.bilibili.com/x/web-interface/view?bvid=$bvid")["data"]
+            ?.jsonObject ?: return emptyList()
+        val title = stripTags(data.string("title"))
+        val pages = data["pages"] as? JsonArray ?: return emptyList()
+
+        return pages.mapNotNull { element ->
+            val obj = element as? JsonObject ?: return@mapNotNull null
+            val cid = obj["cid"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null
+            if (cid <= 0) return@mapNotNull null
+            val page = obj["page"]?.jsonPrimitive?.intOrNull ?: 0
+            DanmakuEpisode(
+                index = page,
+                title = obj.string("part").ifBlank { "P" + page },
+                longTitle = title,
+                cid = cid,
+                // 分 P 的时长单位是秒，统一换成毫秒，跟番剧库那条路保持一致
+                durationMs = (obj["duration"]?.jsonPrimitive?.longOrNull ?: 0L) * 1000,
+            )
+        }
+    }
+
     // ---------------- 弹幕 ----------------
 
     fun comments(cid: Long): List<Danmaku> {
@@ -171,5 +234,16 @@ class BiliDanmakuClient(
 
         fun encodeComponent(text: String): String =
             java.net.URLEncoder.encode(text, "UTF-8")
+
+        /** 搜索接口的时长是 "560:11" / "1:02:03" 这种字符串，不是秒数。 */
+        fun parseDuration(raw: String): Int {
+            val parts = raw.trim().split(':').mapNotNull { it.toIntOrNull() }
+            return when (parts.size) {
+                3 -> parts[0] * 3600 + parts[1] * 60 + parts[2]
+                2 -> parts[0] * 60 + parts[1]
+                1 -> parts[0]
+                else -> 0
+            }
+        }
     }
 }

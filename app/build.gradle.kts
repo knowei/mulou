@@ -40,6 +40,16 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+
+        // 弹弹play 开放平台凭证也不进仓库，本机 local.properties 里写：
+        //   komo.dandanplay.appId=...
+        //   komo.dandanplay.secret=...
+        // 或环境变量 KOMO_DANDANPLAY_APP_ID / KOMO_DANDANPLAY_SECRET。
+        // 没配时弹幕界面里不会出现「弹弹play」这个来源。
+        val ddpAppId = secret("komo.dandanplay.appId", "KOMO_DANDANPLAY_APP_ID") ?: ""
+        val ddpSecret = secret("komo.dandanplay.secret", "KOMO_DANDANPLAY_SECRET") ?: ""
+        buildConfigField("String", "DANDANPLAY_APP_ID", "\"$ddpAppId\"")
+        buildConfigField("String", "DANDANPLAY_SECRET", "\"$ddpSecret\"")
     }
 
     // 签名信息不进仓库。自备 keystore 后在本机 local.properties 里写（路径相对项目根）：

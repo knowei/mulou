@@ -112,6 +112,7 @@ import com.dmanime.app.danmaku.DanmakuLayer
 import com.dmanime.app.download.DownloadItem
 import com.dmanime.app.download.humanSize
 import com.dmanime.catalog.CatalogSubject
+import com.dmanime.danmaku.DanmakuOrigin
 import com.dmanime.rules.model.AnimeRule
 import com.dmanime.rules.model.SearchItem
 import com.dmanime.catalog.today
@@ -3376,7 +3377,13 @@ private fun DanmakuOffsetButton(label: String, onClick: () -> Unit) {
 private fun DanmakuSettingsCard(vm: AppViewModel, state: UiState) {
     var expanded by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(vertical = 2.dp),
+        ) {
             Text("弹幕", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.width(8.dp))
             val hint = when {
@@ -3407,6 +3414,17 @@ private fun DanmakuSettingsCard(vm: AppViewModel, state: UiState) {
             )
         }
 
+        if (!expanded && state.danmakuMissing.isNotBlank()) {
+            Text(
+                "没取到 ${state.danmakuMissing}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 52.dp),
+            )
+        }
+
         if (!expanded) return@Column
 
         Spacer(Modifier.height(4.dp))
@@ -3425,6 +3443,26 @@ private fun DanmakuSettingsCard(vm: AppViewModel, state: UiState) {
                 label = { Text("关") },
             )
         }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("来源", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(52.dp))
+            state.danmakuPickable
+                .sortedBy { DanmakuOrigin.entries.indexOf(it) }
+                .forEach { origin ->
+                    FilterChip(
+                        selected = origin in state.danmakuOrigins,
+                        onClick = { vm.toggleDanmakuOrigin(origin) },
+                        label = { Text(origin.shortLabel) },
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+        }
+        Text(
+            "勾一个只看那一个，勾多个按时间合在一起。官方番剧库标题集数最准；用户投稿能补 B 站没引进的番；弹弹play 需要自己配凭证。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 52.dp, bottom = 2.dp),
+        )
 
         DanmakuSliderRow(
             label = "透明度",

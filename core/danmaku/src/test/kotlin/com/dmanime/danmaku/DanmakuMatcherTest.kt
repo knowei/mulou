@@ -87,4 +87,15 @@ class DanmakuMatcherTest {
         val s = season(1, "孤独摇滚！", episodes = 12)
         assertNull(DanmakuMatcher.best("葬送的芙莉莲", listOf(s), expectedEpisodes = 28))
     }
+
+    @Test
+    fun `季数标记归一成 sN`() {
+        assertEquals(setOf("s1"), DanmakuMatcher.seasonKey("猫与龙"))
+        assertEquals(setOf("s1"), DanmakuMatcher.seasonKey("猫与龙 第一季"))
+        assertEquals(setOf("s1"), DanmakuMatcher.seasonKey("猫与龙 season1"))
+        assertEquals(setOf("s2"), DanmakuMatcher.seasonKey("猫与龙 第二季"))
+        assertEquals(setOf("s2"), DanmakuMatcher.seasonKey("猫与龙 第2期"))
+        assertEquals(setOf("s1", "剧场版"), DanmakuMatcher.seasonKey("剧场版 链锯人 蕾塞篇"))
+        assertEquals(setOf("s1", "restart"), DanmakuMatcher.seasonKey("魔法少女育成计划 restart"))
+    }
 }

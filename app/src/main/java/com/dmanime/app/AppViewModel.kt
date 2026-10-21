@@ -21,6 +21,7 @@ import com.dmanime.catalog.Images
 import com.dmanime.catalog.SearchResult
 import com.dmanime.catalog.SubjectDetail
 import com.dmanime.danmaku.Danmaku
+import com.dmanime.danmaku.DanmakuOrigin
 import com.dmanime.rules.css1.Css1Converter
 import com.dmanime.rules.engine.RuleEngine
 import com.dmanime.rules.model.AnimeRule
@@ -185,8 +186,17 @@ data class UiState(
     val danmakuLoading: Boolean = false,
     /** 非空表示这一集没取到弹幕（B 站没有这部剧/这集），界面据此什么都不显示。 */
     val danmakuError: String = "",
-    /** 弹幕来源说明，例如「哔哩哔哩 · 葬送的芙莉莲 第5话」。 */
+    /** 弹幕来源说明，例如「番剧库 · 葬送的芙莉莲 第5话」。 */
     val danmakuSource: String = "",
+    /**
+     * 用户勾选的弹幕来源。勾一个就只显示那一个，勾多个按时间合并。
+     * 默认走官方番剧库——标题和集数最准。
+     */
+    val danmakuOrigins: Set<DanmakuOrigin> = setOf(DanmakuOrigin.Catalog),
+    /** 当前能选的来源。弹弹play 没配凭证就不列出来，避免点了必然失败。 */
+    val danmakuPickable: Set<DanmakuOrigin> = setOf(DanmakuOrigin.Catalog, DanmakuOrigin.Ugc),
+    /** 勾了但没取到的来源及原因，例如「用户投稿：没找到对得上的搬运」。 */
+    val danmakuMissing: String = "",
     /** 主题：light / dark / system */
     val themeMode: String = "light",
     /** 导航方向：true=前进（新页面从右滑入），false=返回（从左滑入） */
@@ -306,6 +316,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             danmakuArea = uiPrefs.getFloat("danmaku_area", 0.62f),
             danmakuSpeed = uiPrefs.getFloat("danmaku_speed", 1f),
             danmakuOffsetMs = uiPrefs.getLong("danmaku_offset", 0L),
+            danmakuOrigins = (uiPrefs.getString("danmaku_origins", "") ?: "")
+                .split(',')
+                .mapNotNull { name -> DanmakuOrigin.entries.firstOrNull { it.name == name } }
+                .toSet()
+                .ifEmpty { setOf(DanmakuOrigin.Catalog) },
+            danmakuPickable = danmakuRepo.availableOrigins,
             alerts = alertStore.load(),
             searchHistory = searchPrefs.getString("history", null)
                 ?.split('\u0001')?.filter { it.isNotBlank() }.orEmpty(),
@@ -1863,6 +1879,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             danmakuComments = emptyList(),
             danmakuSource = "",
             danmakuError = "",
+            danmakuMissing = "",
             danmakuLoading = false,
         )
         danmakuLoadedKey = ""
@@ -2175,23 +2192,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val total = state.detailInfo?.totalEpisodes?.takeIf { it > 0 }
             ?: state.detailInfo?.episodeCount
             ?: 0
+        val origins = state.danmakuOrigins.ifEmpty { setOf(DanmakuOrigin.Catalog) }
         state = state.copy(
             danmakuComments = emptyList(),
             danmakuSource = "",
             danmakuError = "",
+            danmakuMissing = "",
             danmakuLoading = true,
         )
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
-                danmakuRepo.load(subjectId, episode, titles, total)
+                danmakuRepo.load(subjectId, episode, titles, total, origins)
             }
             result.onSuccess { bundle ->
+                val originLabel = bundle.origins
+                    .sortedBy { DanmakuOrigin.entries.indexOf(it) }
+                    .joinToString(" + ") { it.shortLabel }
+                val missing = bundle.failures.entries
+                    .sortedBy { DanmakuOrigin.entries.indexOf(it.key) }
+                    .joinToString("；") { "${it.key.shortLabel}：${it.value}" }
                 state = state.copy(
                     danmakuLoading = false,
                     danmakuComments = bundle.comments,
-                    danmakuSource = "哔哩哔哩 · ${bundle.seasonTitle} ${bundle.episodeTitle}".trim(),
+                    danmakuSource = "$originLabel · ${bundle.seasonTitle} ${bundle.episodeTitle}".trim(),
+                    danmakuMissing = missing,
                 )
-                appendLog("弹幕 ${bundle.comments.size} 条（${bundle.seasonTitle}）")
+                appendLog("弹幕 ${bundle.comments.size} 条（$originLabel · ${bundle.seasonTitle}）")
+                if (missing.isNotBlank()) appendLog("弹幕来源缺：$missing")
             }.onFailure { error ->
                 // 失败不清 key：留着让人能在设置里手动重试
                 danmakuLoadedKey = ""
@@ -2199,6 +2226,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     danmakuLoading = false,
                     danmakuComments = emptyList(),
                     danmakuError = error.message ?: "取弹幕失败",
+                    danmakuMissing = "",
                 )
                 appendLog("弹幕不可用：${error.message}")
             }
@@ -2220,6 +2248,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         uiPrefs.edit().putBoolean("danmaku_on", next).apply()
         state = state.copy(danmakuOn = next)
         if (next && state.danmakuComments.isEmpty() && state.danmakuError.isBlank()) maybeLoadDanmaku()
+    }
+
+    /**
+     * 勾上/取消一个弹幕来源。
+     *
+     * 至少留一个——全取消就没东西可显示。改了来源必须重取：不同来源的标题、
+     * 集号都对不上，之前的缓存也不能直接复用。
+     */
+    fun toggleDanmakuOrigin(origin: DanmakuOrigin) {
+        if (origin !in state.danmakuPickable) return
+        val next = if (origin in state.danmakuOrigins) {
+            state.danmakuOrigins - origin
+        } else {
+            state.danmakuOrigins + origin
+        }
+        if (next.isEmpty()) return
+        uiPrefs.edit().putString("danmaku_origins", next.joinToString(",") { it.name }).apply()
+        state = state.copy(danmakuOrigins = next)
+        danmakuLoadedKey = ""
+        if (!state.danmakuOn) return
+        val subjectId = state.playSubjectId
+        val episode = state.playEpisodeIndex + 1
+        if (subjectId != 0 && episode > 0) loadDanmakuFor(subjectId, episode)
     }
 
     fun setDanmakuAlpha(value: Float) {

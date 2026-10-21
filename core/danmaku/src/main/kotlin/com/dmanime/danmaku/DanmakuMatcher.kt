@@ -35,6 +35,35 @@ object DanmakuMatcher {
         return MARKERS.flatMapTo(LinkedHashSet()) { regex -> regex.findAll(normalized).map { it.value } }
     }
 
+    private val SEASON_NUMBER = Regex("[0-9]+|十[一二三四五六七八九]?|[一二三四五六七八九]")
+
+    private val CN_DIGITS = mapOf(
+        '一' to 1, '二' to 2, '三' to 3, '四' to 4, '五' to 5,
+        '六' to 6, '七' to 7, '八' to 8, '九' to 9, '十' to 10,
+    )
+
+    /**
+     * 归一化后的版本标记，用来比较"两个标题说的是不是同一季"。
+     *
+     * 和 [markers] 的区别：`第一季` / `season1` / `1st season` / `part1` 都折叠成 `s1`，
+     * 并且**没说第几季就等于第一季**。这样 UGC 区那种"【猫与龙】第一季 全12集"
+     * 的标题不会被白白否掉，而"第二季"依然判为另一部。
+     * 剧场版/总集篇/restart 这类非季标记原样保留。
+     */
+    fun seasonKey(text: String): Set<String> {
+        val out = LinkedHashSet<String>()
+        for (marker in markers(text)) {
+            val number = SEASON_NUMBER.find(marker)?.value?.let { raw ->
+                if (raw == "十") 10 else CN_DIGITS[raw[0]] ?: raw.toIntOrNull()
+            }
+            out += if (number != null) "s$number" else marker
+        }
+        // 没写第几季就当第一季：这样「剧场版 X」和「X 第一季」不会因为
+        // 一个带季数、一个不带而被判成两部片。
+        if (out.none { it.startsWith("s") && it.drop(1).toIntOrNull() != null }) out += "s1"
+        return out
+    }
+
     fun normalize(text: String): String {
         val sb = StringBuilder(text.length)
         for (ch in text) {
