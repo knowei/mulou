@@ -393,6 +393,8 @@ fun App(vm: AppViewModel) {
 @Composable
 private fun HomeScreen(vm: AppViewModel, state: UiState) {
     val days = state.home.days
+    // 进来顺手探一次追番状态（30 分钟内探过的不重探，不必每次打站点）
+    LaunchedEffect(Unit) { vm.refreshWatchStatus() }
     val today = days.today(remember { LocalDate.now().dayOfWeek.value })
     val season = days.flatMap { it.items }
         .distinctBy { it.id }
@@ -438,7 +440,36 @@ private fun HomeScreen(vm: AppViewModel, state: UiState) {
         }
 
         if (state.watches.isNotEmpty()) {
-            item { SectionHeader("继续观看", "${state.watches.size} 部") }
+            item {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    Text("继续观看", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "${state.watches.size} 部",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    // 卡片状态要打站点才知道，所以给个手动入口，别让用户以为数据是实时的
+                    Text(
+                        if (state.watchProbing) "检查中…" else "刷新状态",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (state.watchProbing) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        modifier = Modifier
+                            .clickable(enabled = !state.watchProbing) { vm.refreshWatchStatus(force = true) }
+                            .padding(start = 8.dp),
+                    )
+                }
+            }
             item {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
@@ -566,6 +597,28 @@ private fun ContinueCard(entry: WatchEntry, imageBase: String, onClick: () -> Un
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
         )
+        val (statusText, statusColor) = when (entry.nextState) {
+            WatchNextState.HasNext -> {
+                val text = if (entry.sourceMax > entry.episodeIndex + 2) {
+                    "源到第 ${entry.sourceMax} 集"
+                } else {
+                    "有更新 · 第 ${entry.episodeIndex + 2} 集"
+                }
+                text to MaterialTheme.colorScheme.secondary
+            }
+            WatchNextState.Finished -> "已看完" to MaterialTheme.colorScheme.onSurfaceVariant
+            WatchNextState.NotYet -> "源未更新" to MaterialTheme.colorScheme.onSurfaceVariant
+            WatchNextState.None -> "" to MaterialTheme.colorScheme.onSurfaceVariant
+        }
+        if (statusText.isNotEmpty()) {
+            Text(
+                statusText,
+                style = MaterialTheme.typography.labelSmall,
+                color = statusColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         if (entry.progress > 0f) {
             Spacer(Modifier.height(2.dp))
             LinearProgressIndicator(

@@ -142,6 +142,8 @@ data class UiState(
     val detailInfo: SubjectDetail? = null,
     val detailLoading: Boolean = false,
     val watches: List<WatchEntry> = emptyList(),
+    /** 正在后台探"追番的源更新到第几集"。 */
+    val watchProbing: Boolean = false,
     val playSubjectId: Int = 0,
     val playRoadIndex: Int = 0,
     val playEpisodeIndex: Int = -1,
@@ -237,6 +239,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         /** media3 的自定义暂停原因：非 NONE 即视为「用户手动暂停」。 */
         const val PAUSE_STOP_REASON = 1
+
+        /** 追番卡片状态多久重探一次：源的集数几小时才变一次，探太勤只是白打站点。 */
+        const val WATCH_STATUS_TTL_MS = 30 * 60 * 1000L
+
+        /** 一次最多探几部，避免一口气把站点打成筛子。 */
+        const val MAX_WATCH_PROBES = 4
     }
 
     var state by mutableStateOf(UiState())
@@ -800,6 +808,52 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val updated = state.watches.filterNot { it.subjectId == subjectId } + entry
         state = state.copy(watches = updated.sortedByDescending { it.updatedAt })
         watchStore.save(state.watches)
+    }
+
+    /**
+     * 探一遍追番的"源更新到第几集"，结果写回追番记录，首页卡片据此显示状态。
+     *
+     * 用的是「更新提醒」那套判据——拿记住的规则去拉分集，数最长的线路有几集。
+     * 失败就记 0：界面什么都不显示，宁可不说也不瞎说。
+     */
+    fun refreshWatchStatus(force: Boolean = false) {
+        if (state.watchProbing) return
+        val now = System.currentTimeMillis()
+        val stale = state.watches.filter { entry ->
+            entry.hasProgress && (
+                force || entry.sourceCheckedAt == 0L ||
+                    now - entry.sourceCheckedAt > WATCH_STATUS_TTL_MS
+                )
+        }
+        if (stale.isEmpty()) return
+        state = state.copy(watchProbing = true)
+        viewModelScope.launch {
+            var probed = 0
+            for (entry in stale.take(MAX_WATCH_PROBES)) {
+                val rule = state.rules.firstOrNull { it.name == entry.ruleName } ?: continue
+                if (rule.baseUrl.isBlank()) continue
+                val max = withContext(Dispatchers.IO) {
+                    runCatching {
+                        engine.chapters(rule, entry.entrySrc)
+                            .roads.filter { it.urls.isNotEmpty() }
+                            .maxOfOrNull { it.urls.size } ?: 0
+                    }.getOrDefault(0)
+                }
+                val index = state.watches.indexOfFirst { it.subjectId == entry.subjectId }
+                if (index >= 0) {
+                    val updated = state.watches.toMutableList()
+                    updated[index] = updated[index].copy(
+                        sourceMax = max,
+                        sourceCheckedAt = System.currentTimeMillis(),
+                    )
+                    state = state.copy(watches = updated)
+                    watchStore.save(updated)
+                    probed++
+                }
+            }
+            state = state.copy(watchProbing = false)
+            if (probed > 0) appendLog("追番状态已更新：$probed 部")
+        }
     }
 
     /** 首页「继续观看」：恢复线路后直接跳到上次的集数与进度。 */
