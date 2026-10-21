@@ -34,6 +34,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
@@ -60,6 +62,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -2925,6 +2928,9 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
         }
     }
 
+    // 全屏时视频下面那块列表看不见，所以设置面板做成弹层；全屏和非全屏共用这一个状态
+    var danmakuSheet by remember { mutableStateOf(false) }
+
     if (state.playerFullscreen) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             if (exoPlayer != null) {
@@ -2953,10 +2959,14 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                     onToggleFullscreen = { vm.setFullscreen(false) },
                     onToggleDanmaku = { vm.toggleDanmaku() },
                     danmakuOn = state.danmakuOn,
+                    onOpenDanmakuSettings = { danmakuSheet = true },
                     onPrev = if (canPrev) ({ vm.play(road!!, state.playEpisodeIndex - 1) }) else null,
                     onNext = if (canNext) ({ vm.play(road!!, state.playEpisodeIndex + 1) }) else null,
                     modifier = Modifier.fillMaxSize(),
                 )
+                if (danmakuSheet) {
+                    DanmakuSettingsSheet(vm, state) { danmakuSheet = false }
+                }
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
@@ -3002,10 +3012,14 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                         onToggleFullscreen = { vm.setFullscreen(true) },
                         onToggleDanmaku = { vm.toggleDanmaku() },
                         danmakuOn = state.danmakuOn,
+                        onOpenDanmakuSettings = { danmakuSheet = true },
                         onPrev = if (canPrev) ({ vm.play(road!!, state.playEpisodeIndex - 1) }) else null,
                         onNext = if (canNext) ({ vm.play(road!!, state.playEpisodeIndex + 1) }) else null,
                         modifier = Modifier.fillMaxSize(),
                     )
+                    if (danmakuSheet) {
+                        DanmakuSettingsSheet(vm, state) { danmakuSheet = false }
+                    }
                     // 点了"源还没有的集数"：盖在画面上提示，而不是静默播上一集
                     state.episodeGate?.let { gate ->
                         Box(
@@ -3374,14 +3388,15 @@ private fun DanmakuOffsetButton(label: String, onClick: () -> Unit) {
  * 而不是让用户以为"这剧没弹幕"。
  */
 @Composable
-private fun DanmakuSettingsCard(vm: AppViewModel, state: UiState) {
-    var expanded by remember { mutableStateOf(false) }
+private fun DanmakuSettingsCard(vm: AppViewModel, state: UiState, forced: Boolean = false) {
+    var expandedLocal by remember { mutableStateOf(false) }
+    val expanded = forced || expandedLocal
     Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 6.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { expanded = !expanded }
+                .clickable { if (!forced) expandedLocal = !expandedLocal }
                 .padding(vertical = 2.dp),
         ) {
             Text("弹幕", style = MaterialTheme.typography.titleSmall)
@@ -3405,11 +3420,15 @@ private fun DanmakuSettingsCard(vm: AppViewModel, state: UiState) {
                 modifier = Modifier.weight(1f),
             )
             Text(
-                if (expanded) "收起" else "调整",
+                when {
+                    forced -> ""
+                    expanded -> "收起"
+                    else -> "调整"
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
-                    .clickable { expanded = !expanded }
+                    .clickable { if (!forced) expandedLocal = !expandedLocal }
                     .padding(4.dp),
             )
         }
@@ -3534,6 +3553,29 @@ private fun DanmakuSettingsCard(vm: AppViewModel, state: UiState) {
                 .clickable { vm.reloadDanmaku() }
                 .padding(vertical = 6.dp),
         )
+    }
+}
+
+/**
+ * 全屏时的弹幕设置弹层。
+ *
+ * 横屏全屏把视频铺满整屏，视频下面那块列表（弹幕卡片就在里面）根本看不见，
+ * 所以右上角的「设置」按钮弹这个 sheet，内容跟卡片展开态是同一份。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DanmakuSettingsSheet(vm: AppViewModel, state: UiState, onDismiss: () -> Unit) {
+    // 横屏高度只有 1080px，半展开会只剩两行可见，还得再拖一次；直接全展开
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 20.dp),
+        ) {
+            DanmakuSettingsCard(vm, state, forced = true)
+        }
     }
 }
 

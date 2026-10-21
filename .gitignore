@@ -12,6 +12,7 @@ tools/mock-site/www/local.m3u8
 dist/*.apk
 *.jks
 *.keystore
+dist/*.zip
 
 # 规则文件指向真实第三方站点，不进仓库、不随发行分发
 dist/rules*.json

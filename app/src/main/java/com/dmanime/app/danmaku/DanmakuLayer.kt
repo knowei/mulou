@@ -155,8 +155,9 @@ private fun buildPlan(
 
     paint.textSize = textSize
     val lineHeight = textSize * 1.45f
-    // 顶部留一行给播放器的「弹幕 开」按钮，别让第一条弹幕压在它下面
-    val topInset = lineHeight
+    // 贴画面最上沿开始排：留白会让第一行看起来"飘"在中间。
+    // 右上角的「弹幕 开」按钮只有一行高，压住它的几率很低，不值得为它空一行。
+    val topInset = 0f
     // 弹幕只铺画面上部：铺满整屏会盖住字幕和人脸
     val usableHeight = height * area.coerceIn(0.2f, 1f)
     val laneCount = max(1, ((usableHeight - topInset) / lineHeight).toInt())
