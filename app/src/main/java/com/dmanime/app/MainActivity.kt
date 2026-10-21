@@ -106,6 +106,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import com.dmanime.app.danmaku.DanmakuLayer
 import com.dmanime.app.download.DownloadItem
 import com.dmanime.app.download.humanSize
 import com.dmanime.catalog.CatalogSubject
@@ -2933,10 +2934,20 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
+                DanmakuLayer(
+                    player = exoPlayer,
+                    comments = state.danmakuComments,
+                    enabled = state.danmakuOn,
+                    alpha = state.danmakuAlpha,
+                    textScale = state.danmakuScale,
+                    offsetMs = state.danmakuOffsetMs,
+                )
                 PlayerOverlay(
                     player = exoPlayer,
                     fullscreen = true,
                     onToggleFullscreen = { vm.setFullscreen(false) },
+                    onToggleDanmaku = { vm.toggleDanmaku() },
+                    danmakuOn = state.danmakuOn,
                     onPrev = if (canPrev) ({ vm.play(road!!, state.playEpisodeIndex - 1) }) else null,
                     onNext = if (canNext) ({ vm.play(road!!, state.playEpisodeIndex + 1) }) else null,
                     modifier = Modifier.fillMaxSize(),
@@ -2970,10 +2981,20 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
+                    DanmakuLayer(
+                        player = exoPlayer,
+                        comments = state.danmakuComments,
+                        enabled = state.danmakuOn,
+                        alpha = state.danmakuAlpha,
+                        textScale = state.danmakuScale,
+                        offsetMs = state.danmakuOffsetMs,
+                    )
                     PlayerOverlay(
                         player = exoPlayer,
                         fullscreen = false,
                         onToggleFullscreen = { vm.setFullscreen(true) },
+                        onToggleDanmaku = { vm.toggleDanmaku() },
+                        danmakuOn = state.danmakuOn,
                         onPrev = if (canPrev) ({ vm.play(road!!, state.playEpisodeIndex - 1) }) else null,
                         onNext = if (canNext) ({ vm.play(road!!, state.playEpisodeIndex + 1) }) else null,
                         modifier = Modifier.fillMaxSize(),
@@ -3049,6 +3070,7 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             ) {
             LazyColumn(Modifier.fillMaxSize()) {
                 item { PlayerInfoCard(vm, state) }
+                item { DanmakuSettingsCard(vm, state) }
 
                 if (state.playStartMs > 0) {
                     item {
@@ -3275,8 +3297,122 @@ private fun PlayerInfoCard(vm: AppViewModel, state: UiState) {
     }
 }
 
-/** airingAt（秒）→ 本地时间字符串。 */
-private fun formatAiring(epochSeconds: Long): String =
+/**
+ * 播放页的弹幕设置。
+ *
+ * 默认收起：只看不调的人不用面对一堆滑条。取不到弹幕时把原因摊开写清楚，
+ * 而不是让用户以为"这剧没弹幕"。
+ */
+@Composable
+private fun DanmakuSettingsCard(vm: AppViewModel, state: UiState) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("弹幕", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.width(8.dp))
+            val hint = when {
+                state.danmakuLoading -> "正在取…"
+                state.danmakuError.isNotBlank() -> state.danmakuError
+                state.danmakuComments.isNotEmpty() -> "${state.danmakuComments.size} 条 · ${state.danmakuSource}"
+                else -> "还没取到"
+            }
+            Text(
+                hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (state.danmakuError.isNotBlank()) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                if (expanded) "收起" else "调整",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable { expanded = !expanded }
+                    .padding(4.dp),
+            )
+        }
+
+        if (!expanded) return@Column
+
+        Spacer(Modifier.height(4.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("显示", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp))
+            FilterChip(
+                selected = state.danmakuOn,
+                onClick = { if (!state.danmakuOn) vm.toggleDanmaku() },
+                label = { Text("开") },
+            )
+            Spacer(Modifier.width(6.dp))
+            FilterChip(
+                selected = !state.danmakuOn,
+                onClick = { if (state.danmakuOn) vm.toggleDanmaku() },
+                label = { Text("关") },
+            )
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("浓度", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp))
+            listOf(0.55f to "淡", 0.85f to "中", 1f to "浓").forEach { (value, label) ->
+                FilterChip(
+                    selected = kotlin.math.abs(state.danmakuAlpha - value) < 0.01f,
+                    onClick = { vm.setDanmakuAlpha(value) },
+                    label = { Text(label) },
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("字号", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp))
+            listOf(0.8f to "小", 1f to "中", 1.3f to "大").forEach { (value, label) ->
+                FilterChip(
+                    selected = kotlin.math.abs(state.danmakuScale - value) < 0.01f,
+                    onClick = { vm.setDanmakuScale(value) },
+                    label = { Text(label) },
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("对齐", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp))
+            TextButton(onClick = { vm.shiftDanmakuOffset(-1_000) }) { Text("−1s") }
+            val seconds = state.danmakuOffsetMs / 1000.0
+            Text(
+                if (state.danmakuOffsetMs == 0L) "正好" else "%.1fs".format(seconds),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = { vm.shiftDanmakuOffset(1_000) }) { Text("+1s") }
+            if (state.danmakuOffsetMs != 0L) {
+                TextButton(onClick = { vm.resetDanmakuOffset() }) { Text("归零") }
+            }
+        }
+
+        Text(
+            "对不上时用「对齐」把弹幕整体挪一挪；换番或换源后集号错位，点下面重新匹配。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "重新匹配",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .clickable { vm.reloadDanmaku() }
+                .padding(vertical = 6.dp),
+        )
+    }
+}
+
+/** airingAt（秒）→ 本地时间字符串。 */private fun formatAiring(epochSeconds: Long): String =
     java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
         .format(java.util.Date(epochSeconds * 1000))
 

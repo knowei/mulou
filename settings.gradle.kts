@@ -18,6 +18,7 @@ rootProject.name = "dmanime"
 
 include(":app")
 include(":core:catalog")
+include(":core:danmaku")
 include(":core:rules")
 include(":core:sniff")
 include(":tools:rule-cli")

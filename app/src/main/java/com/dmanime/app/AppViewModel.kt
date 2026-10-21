@@ -13,12 +13,14 @@ import com.dmanime.app.download.DownloadMeta
 import com.dmanime.app.download.DownloadUtil
 import com.dmanime.app.download.SubjectMeta
 import com.dmanime.app.download.SubjectMetaStore
+import com.dmanime.app.danmaku.DanmakuRepository
 import com.dmanime.catalog.CalendarDay
 import com.dmanime.catalog.CatalogSubject
 import com.dmanime.catalog.SubjectCharacter
 import com.dmanime.catalog.Images
 import com.dmanime.catalog.SearchResult
 import com.dmanime.catalog.SubjectDetail
+import com.dmanime.danmaku.Danmaku
 import com.dmanime.rules.css1.Css1Converter
 import com.dmanime.rules.engine.RuleEngine
 import com.dmanime.rules.model.AnimeRule
@@ -169,6 +171,18 @@ data class UiState(
     /** 下一集什么时候播（AniList）。没用/匹配不上时为 null。 */
     val airing: AiringInfo? = null,
     val characters: List<SubjectCharacter> = emptyList(),
+    // ---------- 弹幕 ----------
+    val danmakuOn: Boolean = true,
+    val danmakuAlpha: Float = 0.92f,
+    val danmakuScale: Float = 1f,
+    /** 手动对齐用的时间偏移（毫秒）。片头长短不一，自动对不准时让用户自己挪。 */
+    val danmakuOffsetMs: Long = 0,
+    val danmakuComments: List<Danmaku> = emptyList(),
+    val danmakuLoading: Boolean = false,
+    /** 非空表示这一集没取到弹幕（B 站没有这部剧/这集），界面据此什么都不显示。 */
+    val danmakuError: String = "",
+    /** 弹幕来源说明，例如「哔哩哔哩 · 葬送的芙莉莲 第5话」。 */
+    val danmakuSource: String = "",
     /** 主题：light / dark / system */
     val themeMode: String = "light",
     /** 导航方向：true=前进（新页面从右滑入），false=返回（从左滑入） */
@@ -231,6 +245,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val uiPrefs = app.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE)
     private val catalog = CatalogRepository(app)
     private val watchStore = WatchStore(app)
+    private val danmakuRepo = DanmakuRepository(app)
+
+    /** 已经加载过弹幕的 `subjectId-episode`，避免同一集重复请求。 */
+    private var danmakuLoadedKey = ""
 
     /** 自动播放管线：armed 表示当前这次播放允许自动找源/换源。 */
     private var autoPlayArmed = false
@@ -278,6 +296,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             indexBaseUrl = catalog.baseUrl,
             imageBase = catalog.imageBase,
             themeMode = uiPrefs.getString("theme", "light") ?: "light",
+            danmakuOn = uiPrefs.getBoolean("danmaku_on", true),
+            danmakuAlpha = uiPrefs.getFloat("danmaku_alpha", 0.92f),
+            danmakuScale = uiPrefs.getFloat("danmaku_scale", 1f),
+            danmakuOffsetMs = uiPrefs.getLong("danmaku_offset", 0L),
             alerts = alertStore.load(),
             searchHistory = searchPrefs.getString("history", null)
                 ?.split('\u0001')?.filter { it.isNotBlank() }.orEmpty(),
@@ -972,7 +994,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             .filterNot { it.subjectId == alert.subjectId && it.episode == alert.episode } + alert
         alertStore.save(list)
         state = state.copy(alerts = list)
-        appendLog("已设置提醒： 第  集（源出现后通知）")
+        appendLog("已设置提醒：第 ${alert.episode} 集（源出现后通知）")
     }
 
     fun removeAlert(id: Long) {
@@ -1034,7 +1056,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("已经是最后一集")
             return
         }
-        appendLog("自动连播：第  集")
+        appendLog("自动连播：第 ${next + 1} 集")
         play(road, next)
     }
     /** 详情页的「选集」：弹集数面板；还没找到源就先自动找。 */
@@ -1831,7 +1853,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             playStartMs = resumePositionFor(index),
             episodeNumber = parseEpisodeNumber(episode) ?: (index + 1),
             playPhase = PlayPhase.Starting,
+            // 换集就把上一集的弹幕清掉，等新的这条流起来再拉
+            danmakuComments = emptyList(),
+            danmakuSource = "",
+            danmakuError = "",
+            danmakuLoading = false,
         )
+        danmakuLoadedKey = ""
         appendLog("打开播放页: $url")
     }
 
@@ -2111,11 +2139,115 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             playerBackTo = Screen.Downloads,
             downloadTip = "",
         )
+        maybeLoadDanmaku()
     }
 
     private fun failureText(reason: Int): String = when (reason) {
         androidx.media3.exoplayer.offline.Download.FAILURE_REASON_NONE -> "未知"
         else -> "错误码 $reason"
+    }
+
+    // ---------- 弹幕 ----------
+
+    /** 播放就绪后叫一次：有片名和集号就去 B 站找这一集的弹幕。 */
+    private fun maybeLoadDanmaku() {
+        val subjectId = state.playSubjectId
+        val episode = state.playEpisodeIndex + 1
+        if (subjectId == 0 || episode <= 0) return
+        loadDanmakuFor(subjectId, episode)
+    }
+
+    private fun loadDanmakuFor(subjectId: Int, episode: Int) {
+        val key = "$subjectId-$episode"
+        if (danmakuLoadedKey == key) return
+        danmakuLoadedKey = key
+        val titles = danmakuTitles()
+        if (titles.isEmpty()) {
+            state = state.copy(danmakuError = "不知道这一集叫什么，没法匹配弹幕")
+            return
+        }
+        val total = state.detailInfo?.totalEpisodes?.takeIf { it > 0 }
+            ?: state.detailInfo?.episodeCount
+            ?: 0
+        state = state.copy(
+            danmakuComments = emptyList(),
+            danmakuSource = "",
+            danmakuError = "",
+            danmakuLoading = true,
+        )
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                danmakuRepo.load(subjectId, episode, titles, total)
+            }
+            result.onSuccess { bundle ->
+                state = state.copy(
+                    danmakuLoading = false,
+                    danmakuComments = bundle.comments,
+                    danmakuSource = "哔哩哔哩 · ${bundle.seasonTitle} ${bundle.episodeTitle}".trim(),
+                )
+                appendLog("弹幕 ${bundle.comments.size} 条（${bundle.seasonTitle}）")
+            }.onFailure { error ->
+                // 失败不清 key：留着让人能在设置里手动重试
+                danmakuLoadedKey = ""
+                state = state.copy(
+                    danmakuLoading = false,
+                    danmakuComments = emptyList(),
+                    danmakuError = error.message ?: "取弹幕失败",
+                )
+                appendLog("弹幕不可用：${error.message}")
+            }
+        }
+    }
+
+    /** 拿去搜 B 站的片名候选：中文名、原名、当前标题，按可能性排序。 */
+    private fun danmakuTitles(): List<String> {
+        val detail = state.detail
+        val list = mutableListOf<String>()
+        detail?.nameCn?.takeIf { it.isNotBlank() }?.let { list += it }
+        detail?.name?.takeIf { it.isNotBlank() }?.let { list += it }
+        state.title.substringBefore(" · ").takeIf { it.isNotBlank() }?.let { list += it }
+        return list.distinct()
+    }
+
+    fun toggleDanmaku() {
+        val next = !state.danmakuOn
+        uiPrefs.edit().putBoolean("danmaku_on", next).apply()
+        state = state.copy(danmakuOn = next)
+        if (next && state.danmakuComments.isEmpty() && state.danmakuError.isBlank()) maybeLoadDanmaku()
+    }
+
+    fun setDanmakuAlpha(value: Float) {
+        val clamped = value.coerceIn(0.1f, 1f)
+        uiPrefs.edit().putFloat("danmaku_alpha", clamped).apply()
+        state = state.copy(danmakuAlpha = clamped)
+    }
+
+    fun setDanmakuScale(value: Float) {
+        val clamped = value.coerceIn(0.6f, 2f)
+        uiPrefs.edit().putFloat("danmaku_scale", clamped).apply()
+        state = state.copy(danmakuScale = clamped)
+    }
+
+    /** 手动对齐：片头长度各家不一样，自动排不齐时让用户自己挪。 */
+    fun shiftDanmakuOffset(deltaMs: Long) {
+        val clamped = (state.danmakuOffsetMs + deltaMs).coerceIn(-60_000L, 60_000L)
+        uiPrefs.edit().putLong("danmaku_offset", clamped).apply()
+        state = state.copy(danmakuOffsetMs = clamped)
+    }
+
+    fun resetDanmakuOffset() {
+        uiPrefs.edit().putLong("danmaku_offset", 0L).apply()
+        state = state.copy(danmakuOffsetMs = 0L)
+    }
+
+    /** 重新配一次：换番/换源后集号对不上时用。 */
+    fun reloadDanmaku() {
+        danmakuLoadedKey = ""
+        val subjectId = state.playSubjectId
+        val episode = state.playEpisodeIndex + 1
+        if (subjectId == 0 || episode <= 0) return
+        if (state.detailInfo?.id != subjectId) loadDetailInfo(subjectId)
+        loadDanmakuFor(subjectId, episode)
     }
 
     // ---------- 嗅探 ----------
@@ -2146,6 +2278,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     playPhase = PlayPhase.Playing,
                 )
                 appendLog("开始播放: ${media.url}")
+                maybeLoadDanmaku()
             }
         }
     }

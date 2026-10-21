@@ -1,4 +1,4 @@
-﻿package com.dmanime.app
+package com.dmanime.app
 
 import android.app.Activity
 import android.content.Context
@@ -71,6 +71,9 @@ fun PlayerOverlay(
     onPrev: (() -> Unit)? = null,
     /** 下一集；null = 没有下一集 */
     onNext: (() -> Unit)? = null,
+    /** 弹幕开关的当前状态；为 null 表示这个播放页没有弹幕功能 */
+    onToggleDanmaku: (() -> Unit)? = null,
+    danmakuOn: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -227,6 +230,29 @@ fun PlayerOverlay(
                         )
                     )
             ) {
+
+                // 弹幕开关放在右上角：底部那行已经塞了进度条、集数控制、倍速和全屏，
+                // 再加一个按钮会把「全屏」挤出屏幕
+                if (onToggleDanmaku != null) {
+                    Text(
+                        if (danmakuOn) "弹幕 开" else "弹幕 关",
+                        color = if (danmakuOn) Color.White else Color.White.copy(alpha = 0.75f),
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 10.dp, end = 12.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                if (danmakuOn) Color(0xFF6E8B7A).copy(alpha = 0.92f)
+                                else Color.Black.copy(alpha = 0.45f)
+                            )
+                            .clickable {
+                                onToggleDanmaku()
+                                showControls = true
+                            }
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
 
                 Column(
                     Modifier
