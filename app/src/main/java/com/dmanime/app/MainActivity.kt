@@ -113,6 +113,7 @@ import com.dmanime.rules.model.AnimeRule
 import com.dmanime.rules.model.SearchItem
 import com.dmanime.catalog.today
 import kotlinx.coroutines.delay
+import java.io.File
 import java.time.LocalDate
 
 // ------------------------------------------------------------------ 主题（木漏 Komo 配色）
@@ -347,6 +348,14 @@ fun App(vm: AppViewModel) {
                 }
             }
             val slideDir = if (state.navForward) 1f else -1f
+            // 有下载在跑时每秒刷一次：不然下载页的进度条和播放页顶栏的"下载"按钮都不会动
+            val hasActiveDownload = state.downloads.any { !it.done && !it.removing }
+            LaunchedEffect(hasActiveDownload) {
+                while (hasActiveDownload) {
+                    kotlinx.coroutines.delay(1000)
+                    vm.refreshDownloads()
+                }
+            }
             Box(
                 Modifier
                     .fillMaxSize()
@@ -1712,6 +1721,9 @@ private fun DownloadsScreen(vm: AppViewModel, state: UiState) {
     val doneCount = items.count { it.done }
     val active = items.filter { !it.done && !it.removing }
     val totalBytes = items.sumOf { if (it.total > 0) it.total else it.bytes }
+    // 按番剧分组：下载页要回答"我下了哪几部"，而不是摊一堆散装视频
+    val groups = items.groupBy { it.meta.subjectId }
+    val context = LocalContext.current
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -1726,12 +1738,12 @@ private fun DownloadsScreen(vm: AppViewModel, state: UiState) {
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "$doneCount 集 · ${humanSize(totalBytes)}",
+                        "${groups.size} 部 · $doneCount 集 · ${humanSize(totalBytes)}",
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Text(
                         if (active.isNotEmpty()) {
-                            "还有 ${active.size} 个没下完 · 存在应用私有目录"
+                            "还有 ${active.size} 集没下完 · 存在应用私有目录"
                         } else {
                             "存在应用私有目录，卸载应用会一起删掉"
                         },
@@ -1779,19 +1791,143 @@ private fun DownloadsScreen(vm: AppViewModel, state: UiState) {
             }
         }
 
-        items(items, key = { it.id }) { item -> DownloadRow(vm, item) }
+        items(groups.keys.toList(), key = { "subject$it" }) { id ->
+            DownloadGroupCard(vm, state, id, groups[id].orEmpty(), context)
+        }
+    }
+}
+
+/**
+ * 一部番对应一张卡片。
+ *
+ * 单集作品（剧场版 / OVA）只有一集，折叠没意义，直接把那一集摊在标题下面；
+ * 多集番剧给一行汇总（已下 n/m 集 · 大小），点开看每一集。
+ */
+@Composable
+private fun DownloadGroupCard(
+    vm: AppViewModel,
+    state: UiState,
+    subjectId: Int,
+    group: List<DownloadItem>,
+    context: android.content.Context,
+) {
+    val meta = state.downloadSubjects[subjectId]
+    val first = group.firstOrNull() ?: return
+    val title = meta?.title?.ifBlank { null } ?: first.meta.subjectTitle.ifBlank { "未知番剧" }
+    // 单集：元信息里就是 1 集，或者唯一这集的标题/番名写着剧场版
+    val single = group.size == 1 &&
+        (meta?.single == true || meta?.totalEpisodes == 1 ||
+            first.meta.episodeName.contains("剧场版") || title.contains("剧场版"))
+    var expanded by remember(subjectId) { mutableStateOf(!single) }
+
+    val bytes = group.sumOf { if (it.total > 0) it.total else it.bytes }
+    val done = group.count { it.done }
+    val coverModel: Any? = remember(subjectId, meta?.coverFile, first.meta.cover, state.imageBase) {
+        val name = meta?.coverFile
+        val local = if (!name.isNullOrBlank()) File(context.filesDir, "subjects/$name") else null
+        // 有本地封面就绝不走网络：离线场景下 URL 只会转圈
+        if (local != null && local.exists() && local.length() > 0) local
+        else first.meta.cover.withImageBase(state.imageBase).ifBlank { null }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !single) { expanded = !expanded }
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (coverModel != null) {
+                AsyncImage(
+                    model = coverModel,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(width = 52.dp, height = 72.dp)
+                        .clip(RoundedCornerShape(6.dp)),
+                )
+                Spacer(Modifier.width(12.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    if (single) {
+                        // 集名在下面那行显示，这里只给大小和状态，避免同一句话出现两遍
+                        listOf(
+                            humanSize(bytes),
+                            if (first.done) "已完成" else first.progressText,
+                        ).filter { it.isNotBlank() }.joinToString(" · ")
+                    } else {
+                        val total = meta?.totalEpisodes ?: 0
+                        buildString {
+                            // "已下载 1/36 集" 比 "已下载 1/1 集 · 全 36 集" 好读
+                            append(
+                                if (total > group.size) "已下载 $done/$total 集"
+                                else "已下载 $done/${group.size} 集"
+                            )
+                            append(" · ")
+                            append(humanSize(bytes))
+                            if (group.any { !it.done }) append(" · 有未完成")
+                        }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (!meta?.summary.isNullOrBlank()) {
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        meta.summary.replace('\n', ' ').trim(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (!single) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (expanded) "收起" else "展开",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+
+        if (single) {
+            DownloadEpisodeRow(vm, first, showCover = false, hideMeta = true)
+        } else if (expanded) {
+            group.sortedBy { it.meta.episodeIndex }.forEach { item ->
+                DownloadEpisodeRow(vm, item, showCover = false)
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
     }
 }
 
 @Composable
-private fun DownloadRow(vm: AppViewModel, item: DownloadItem) {
+private fun DownloadEpisodeRow(
+    vm: AppViewModel,
+    item: DownloadItem,
+    showCover: Boolean,
+    hideMeta: Boolean = false,
+) {
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(start = 46.dp, end = 16.dp, top = 2.dp, bottom = 6.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (item.meta.cover.isNotBlank()) {
+            if (showCover && item.meta.cover.isNotBlank()) {
                 AsyncImage(
                     model = item.meta.cover,
                     contentDescription = null,
@@ -1804,22 +1940,28 @@ private fun DownloadRow(vm: AppViewModel, item: DownloadItem) {
             }
             Column(Modifier.weight(1f)) {
                 Text(
-                    item.meta.subjectTitle.ifBlank { "未知番剧" },
-                    style = MaterialTheme.typography.titleSmall,
+                    item.meta.episodeName.ifBlank { "第 ${item.meta.episodeIndex + 1} 集" },
+                    style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    "${item.meta.episodeName} · ${item.progressText}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (item.failed) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Spacer(Modifier.height(1.dp))
+                if (!hideMeta) {
+                    Text(
+                        // total 未知（HLS 分片）时 progressText 已经是大小，拼两次会重复
+                        listOf(
+                            item.progressText,
+                            humanSize(if (item.total > 0) item.total else item.bytes),
+                        ).distinct().joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (item.failed) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
             TextButton(
                 onClick = {
                     when {
@@ -1842,16 +1984,15 @@ private fun DownloadRow(vm: AppViewModel, item: DownloadItem) {
             }
         }
         if (!item.done) {
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(4.dp))
             LinearProgressIndicator(
                 progress = { if (item.total > 0) item.percent / 100f else 0f },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(4.dp),
+                    .height(3.dp),
             )
         }
     }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
 }
 
 @Composable
@@ -3033,7 +3174,11 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
 private fun PlayerInfoCard(vm: AppViewModel, state: UiState) {
     val info = state.detailInfo
     val subject = state.detail
-    val cover = (subject?.coverUrlSmall ?: "").withImageBase(state.imageBase)
+    // 已下载的番剧优先用本地封面：断网时播放页不该只剩一个空框
+    val localCover = remember(state.playSubjectId, state.downloads.size) {
+        vm.localCoverPath(state.playSubjectId)?.let { File(it) }?.takeIf { it.exists() }
+    }
+    val cover = localCover ?: (subject?.coverUrlSmall ?: "").withImageBase(state.imageBase)
     val total = info?.totalEpisodes ?: 0
     val aired = info?.eps ?: 0
 
@@ -3058,7 +3203,11 @@ private fun PlayerInfoCard(vm: AppViewModel, state: UiState) {
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            if (cover.isNotEmpty()) {
+            val hasCover = when (cover) {
+                is File -> cover.exists()
+                else -> (cover as String).isNotEmpty()
+            }
+            if (hasCover) {
                 AsyncImage(
                     model = cover,
                     contentDescription = null,

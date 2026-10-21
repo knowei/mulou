@@ -11,6 +11,8 @@ import com.dmanime.app.download.AppDownloadService
 import com.dmanime.app.download.DownloadItem
 import com.dmanime.app.download.DownloadMeta
 import com.dmanime.app.download.DownloadUtil
+import com.dmanime.app.download.SubjectMeta
+import com.dmanime.app.download.SubjectMetaStore
 import com.dmanime.catalog.CalendarDay
 import com.dmanime.catalog.CatalogSubject
 import com.dmanime.catalog.SubjectCharacter
@@ -189,6 +191,8 @@ data class UiState(
     val alerts: List<EpisodeAlert> = emptyList(),
     /** 下载队列（media3 Download 的投影）。 */
     val downloads: List<DownloadItem> = emptyList(),
+    /** 已落盘的番剧元信息（标题/简介/本地封面），按 subjectId 索引。 */
+    val downloadSubjects: Map<Int, SubjectMeta> = emptyMap(),
     /** 下载页顶部的一次性提示，如"这一集还没解析出地址"。 */
     val downloadTip: String = "",
 )
@@ -211,6 +215,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     private val cookieStore = CookieStore(app)
+    /** 已经尝试补过封面的番剧，避免每次刷新下载列表都重试网络。 */
+    private val coverRetry = mutableSetOf<Int>()
     private val alertStore = AlertStore(app)
     private val aniList = AniListClient(app)
     private val engine = RuleEngine(
@@ -1882,13 +1888,51 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshDownloads() {
         if (!DownloadUtil.ready) return
+        val imageBase = state.imageBase
         viewModelScope.launch {
-            val list = withContext(Dispatchers.IO) {
-                runCatching { DownloadUtil.list() }.getOrDefault(emptyList())
+            val (list, subjects) = withContext(Dispatchers.IO) {
+                val items = runCatching { DownloadUtil.list() }.getOrDefault(emptyList())
+                var metas = runCatching { SubjectMetaStore.all(getApplication()) }
+                    .getOrDefault(emptyList())
+                    .associateBy { it.id }
+                // 旧版本的下载没存过元信息：用下载记录里的标题/封面补一份，否则卡片上
+                // 只剩「未知番剧」一行字，离线时什么都看不出
+                val orphan = items.map { it.meta.subjectId }.distinct().filter { metas[it] == null }
+                if (orphan.isNotEmpty()) {
+                    orphan.forEach { id ->
+                        val m = items.firstOrNull { it.meta.subjectId == id }?.meta ?: return@forEach
+                        if (m.subjectTitle.isBlank()) return@forEach
+                        SubjectMetaStore.ensure(
+                            getApplication(),
+                            SubjectMeta(id = id, title = m.subjectTitle, coverUrl = fixedCover(m.cover, imageBase)),
+                        )
+                    }
+                    metas = runCatching { SubjectMetaStore.all(getApplication()) }
+                        .getOrDefault(emptyList())
+                        .associateBy { it.id }
+                }
+                // 老下载记录没存本地封面（或者当初用的是直连地址）时补一次，失败就放弃
+                items.map { it.meta.subjectId }.distinct().forEach { id ->
+                    val m = metas[id] ?: return@forEach
+                    if (m.coverUrl.isBlank()) return@forEach
+                    if (SubjectMetaStore.localCover(getApplication(), id) != null) return@forEach
+                    if (!coverRetry.add(id)) return@forEach
+                    SubjectMetaStore.fetchCover(getApplication(), id, fixedCover(m.coverUrl, imageBase))
+                }
+                items to metas
             }
-            state = state.copy(downloads = list)
+            state = state.copy(downloads = list, downloadSubjects = subjects)
         }
     }
+
+    /** lain.bgm.tv 在多数网络下直连不通，统一换成设置里的图片前缀。 */
+    private fun fixedCover(url: String, base: String): String =
+        if (base.isBlank() || url.isBlank()) url
+        else url.replace("https://lain.bgm.tv", base).replace("http://lain.bgm.tv", base)
+
+    /** 本地封面的绝对路径（给下载页用），没存过返回 null。 */
+    fun localCoverPath(subjectId: Int): String? =
+        SubjectMetaStore.localCover(getApplication(), subjectId)?.absolutePath
 
     /** 当前正在看的这一集的下载记录（没有则 null），用于播放页按钮状态。 */
     fun downloadOfCurrent(): DownloadItem? {
@@ -1931,12 +1975,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val road = state.roads.getOrNull(state.playRoadIndex)
         val epName = road?.names?.getOrNull(epIndex) ?: "第${epIndex + 1}集"
         val subjectTitle = subject?.displayTitle ?: state.title.substringBefore(" · ")
+        // 封面存成"这台网络能打开的地址"：直连 lain.bgm.tv 在多数网络下超时，
+        // 存原始 URL 会导致下载页空白 + 离线封面永远下不下来
+        val coverUrl = subject?.coverUrl.orEmpty().let { url ->
+            if (state.imageBase.isBlank()) url
+            else url.replace("https://lain.bgm.tv", state.imageBase)
+                .replace("http://lain.bgm.tv", state.imageBase)
+        }
         val meta = DownloadMeta(
             subjectId = subjectId,
             episodeIndex = epIndex,
             episodeName = epName,
             subjectTitle = subjectTitle,
-            cover = subject?.coverUrl.orEmpty(),
+            cover = coverUrl,
             url = media.url,
             headers = media.headers,
         )
@@ -1952,6 +2003,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             state = state.copy(downloadTip = "")
             appendLog("加入下载：$subjectTitle $epName")
             refreshDownloads()
+            // 番剧标题/简介/封面一起存到本地：离线时下载页还要显示图和简介
+            val info = state.detailInfo
+            val subjectMeta = SubjectMeta(
+                id = subjectId,
+                title = subjectTitle,
+                originalTitle = subject?.name.orEmpty(),
+                summary = info?.summary?.ifBlank { null } ?: subject?.summary.orEmpty(),
+                coverUrl = coverUrl,
+                totalEpisodes = info?.episodeCount ?: 0,
+                airDate = info?.airDate ?: subject?.airDate.orEmpty(),
+                rating = (info?.rating?.score ?: 0.0).takeIf { it > 0 }
+                    ?: (subject?.rating?.score ?: 0.0),
+                tags = info?.tags?.map { it.name }?.take(8).orEmpty(),
+            )
+            viewModelScope.launch {
+                withContext(Dispatchers.IO) {
+                    runCatching { SubjectMetaStore.ensure(getApplication(), subjectMeta) }
+                }
+                refreshDownloads()
+            }
         }.onFailure {
             showError("下载没起来：${describe(it)}")
         }
@@ -1996,6 +2067,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun removeAllDownloads() {
+        val subjectIds = state.downloads.map { it.meta.subjectId }.toSet()
         runCatching {
             androidx.media3.exoplayer.offline.DownloadService.sendRemoveAllDownloads(
                 getApplication(),
@@ -2003,7 +2075,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 false,
             )
         }
-        state = state.copy(downloads = emptyList())
+        state = state.copy(downloads = emptyList(), downloadSubjects = emptyMap())
+        // 元信息和封面跟着删，否则删光了还占着几百 KB
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                subjectIds.forEach { runCatching { SubjectMetaStore.remove(getApplication(), it) } }
+            }
+        }
     }
 
     /** App 被杀过之后，media3 不会自己把没下完的重新排上，需要手动叫一下。 */

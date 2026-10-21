@@ -230,10 +230,21 @@ object DownloadUtil {
     )
 
     /** 已下完的集：返回本地可播的缓存 key。 */
+    /**
+     * 这一集是否已经下完，返回可用于播放的缓存键。
+     *
+     * 注意不能返回 `request.customCacheKey`：HLS 请求禁止设置 customCacheKey
+     * （media3 会抛 "customCacheKey must be null for type: 2"），所以 HLS 下载
+     * 的键一直是默认的 uri，这里也必须用同样的默认键，否则播放时缓存永远不命中。
+     */
     fun completedFor(subjectId: Int, episodeIndex: Int): String? {
         if (!ready) return null
         val d = find(cacheKey(subjectId, episodeIndex)) ?: return null
-        return if (d.state == Download.STATE_COMPLETED) d.request.customCacheKey else null
+        return if (d.state == Download.STATE_COMPLETED) {
+            d.request.customCacheKey ?: d.request.uri.toString()
+        } else {
+            null
+        }
     }
 
     /** 边下边播用：同一个 SimpleCache 供播放器读取。 */
