@@ -1,4 +1,4 @@
-﻿package com.dmanime.app
+package com.dmanime.app
 
 import android.app.Activity
 import android.content.Intent
@@ -38,6 +38,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -100,10 +101,13 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import com.dmanime.app.download.DownloadItem
+import com.dmanime.app.download.humanSize
 import com.dmanime.catalog.CatalogSubject
 import com.dmanime.rules.model.AnimeRule
 import com.dmanime.rules.model.SearchItem
@@ -265,6 +269,7 @@ fun App(vm: AppViewModel) {
                                 Screen.Verify -> "人机验证 · ${state.verifyRuleName}"
                                 Screen.Health -> "源体检"
                                 Screen.Season -> "季度番剧"
+                                Screen.Downloads -> "下载"
                                 else -> ""
                             },
                             maxLines = 1,
@@ -281,6 +286,25 @@ fun App(vm: AppViewModel) {
                     actions = {
                         if (state.screen == Screen.Verify) {
                             TextButton(onClick = vm::finishVerify) { Text("完成") }
+                        }
+                        if (state.screen == Screen.Player && state.playMedia != null) {
+                            val dl = state.downloads.firstOrNull {
+                                it.meta.subjectId == state.playSubjectId &&
+                                    it.meta.episodeIndex == state.playEpisodeIndex
+                            }
+                            TextButton(
+                                onClick = {
+                                    if (dl == null) vm.downloadCurrentEpisode() else vm.openDownloads()
+                                },
+                            ) {
+                                Text(
+                                    when {
+                                        dl == null -> "下载"
+                                        dl.done -> "已下载"
+                                        else -> dl.progressText
+                                    }
+                                )
+                            }
                         }
                     },
                 )
@@ -341,6 +365,7 @@ fun App(vm: AppViewModel) {
                 Screen.Verify -> VerifyScreen(vm, state)
                 Screen.Health -> HealthScreen(vm, state)
                 Screen.Season -> SeasonScreen(vm, state)
+                Screen.Downloads -> DownloadsScreen(vm, state)
             }
             }
         }
@@ -1649,6 +1674,187 @@ private fun SeasonPickerSheet(
 // ------------------------------------------------------------------ 我的
 
 @Composable
+private fun MineEntryRow(
+    title: String,
+    subtitle: String = "",
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (subtitle.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+}
+
+@Composable
+private fun DownloadsScreen(vm: AppViewModel, state: UiState) {
+    val items = state.downloads
+    val doneCount = items.count { it.done }
+    val active = items.filter { !it.done && !it.removing }
+    val totalBytes = items.sumOf { if (it.total > 0) it.total else it.bytes }
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 24.dp),
+    ) {
+        item {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "$doneCount 集 · ${humanSize(totalBytes)}",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        if (active.isNotEmpty()) {
+                            "还有 ${active.size} 个没下完 · 存在应用私有目录"
+                        } else {
+                            "存在应用私有目录，卸载应用会一起删掉"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (active.any { it.paused || it.queued }) {
+                    TextButton(onClick = vm::resumeAllDownloads) { Text("全部继续") }
+                }
+                if (items.isNotEmpty()) {
+                    TextButton(onClick = vm::removeAllDownloads) { Text("全部删除") }
+                }
+            }
+        }
+
+        if (state.downloadTip.isNotBlank()) {
+            item {
+                Text(
+                    state.downloadTip,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+        }
+
+        if (items.isEmpty()) {
+            item {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 32.dp, vertical = 40.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("还没有下载", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "在播放页右上角点「下载」，把正在看的那一集存到本地。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+
+        items(items, key = { it.id }) { item -> DownloadRow(vm, item) }
+    }
+}
+
+@Composable
+private fun DownloadRow(vm: AppViewModel, item: DownloadItem) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (item.meta.cover.isNotBlank()) {
+                AsyncImage(
+                    model = item.meta.cover,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(width = 48.dp, height = 66.dp)
+                        .clip(RoundedCornerShape(6.dp)),
+                )
+                Spacer(Modifier.width(10.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    item.meta.subjectTitle.ifBlank { "未知番剧" },
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "${item.meta.episodeName} · ${item.progressText}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (item.failed) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            TextButton(
+                onClick = {
+                    when {
+                        item.done -> vm.playDownload(item)
+                        item.running -> vm.pauseDownload(item.id)
+                        else -> vm.resumeDownload(item.id)
+                    }
+                },
+            ) {
+                Text(
+                    when {
+                        item.done -> "播放"
+                        item.running -> "暂停"
+                        else -> "继续"
+                    }
+                )
+            }
+            TextButton(onClick = { vm.removeDownload(item.id) }) {
+                Text("删除", color = MaterialTheme.colorScheme.error)
+            }
+        }
+        if (!item.done) {
+            Spacer(Modifier.height(6.dp))
+            LinearProgressIndicator(
+                progress = { if (item.total > 0) item.percent / 100f else 0f },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp),
+            )
+        }
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+}
+
+@Composable
 private fun MineScreen(vm: AppViewModel, state: UiState) {
     val clipboard = LocalClipboardManager.current
     var showAllRules by remember { mutableStateOf(false) }
@@ -1684,7 +1890,32 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                     StatChip("$indexCount", "索引")
                     StatChip("${state.watches.size}", "追番")
                 }
+                Spacer(Modifier.height(6.dp))
             }
+        }
+
+        item {
+            val doneDownloads = state.downloads.count { it.done }
+            val runningDownloads = state.downloads.count { it.running }
+            MineEntryRow(
+                title = "下载",
+                subtitle = when {
+                    runningDownloads > 0 -> "$runningDownloads 个正在下载"
+                    doneDownloads > 0 -> "$doneDownloads 集"
+                    else -> "离线看已下载的集"
+                },
+                onClick = vm::openDownloads,
+            )
+            MineEntryRow(
+                title = "季度番剧",
+                subtitle = "按季度翻新番",
+                onClick = vm::openSeason,
+            )
+            MineEntryRow(
+                title = "源体检",
+                subtitle = "检测规则可用性",
+                onClick = vm::openHealth,
+            )
         }
 
         item { MineSection("索引") }
@@ -2439,9 +2670,29 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             val httpFactory = DefaultHttpDataSource.Factory()
                 .setDefaultRequestProperties(it.headers)
                 .setUserAgent(DEFAULT_UA)
-            val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
+            val upstream = DefaultDataSource.Factory(context, httpFactory)
+            // 只有「已下完」的集才挂缓存：直接读本地分片，断网也能播。
+            // 在线播放不挂缓存，避免看一集就往缓存目录塞几百 MB。
+            val cache = if (
+                com.dmanime.app.download.DownloadUtil.completedFor(
+                    state.playSubjectId,
+                    state.playEpisodeIndex,
+                ) != null
+            ) {
+                com.dmanime.app.download.DownloadUtil.playbackCache()
+            } else {
+                null
+            }
+            val factory: androidx.media3.datasource.DataSource.Factory = if (cache != null) {
+                CacheDataSource.Factory()
+                    .setCache(cache)
+                    .setUpstreamDataSourceFactory(upstream)
+                    .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            } else {
+                upstream
+            }
             ExoPlayer.Builder(context)
-                .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+                .setMediaSourceFactory(DefaultMediaSourceFactory(factory))
                 .build()
                 .apply {
                     // 第二个参数就是起播位置：续播不用等 prepare 后再 seek

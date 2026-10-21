@@ -7,6 +7,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.dmanime.app.download.AppDownloadService
+import com.dmanime.app.download.DownloadItem
+import com.dmanime.app.download.DownloadMeta
+import com.dmanime.app.download.DownloadUtil
 import com.dmanime.catalog.CalendarDay
 import com.dmanime.catalog.CatalogSubject
 import com.dmanime.catalog.SubjectCharacter
@@ -45,7 +49,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-enum class Screen { Home, Search, Mine, Detail, Chapters, Player, Verify, Health, Season }
+enum class Screen { Home, Search, Mine, Downloads, Detail, Chapters, Player, Verify, Health, Season }
 
 /** 一个源的体检结果。status: ok / empty / error */
 data class SourceHealth(
@@ -125,6 +129,8 @@ data class UiState(
     val home: HomeState = HomeState(),
     val detail: CatalogSubject? = null,
     val detailOrigin: Screen = Screen.Home,
+    /** 详情页返回栈：打开详情时压入来源屏，返回时弹回。 */
+    val detailStack: List<Screen> = emptyList(),
     val indexBaseUrl: String = "",
     val indexProbe: String = "",
     val imageBase: String = "",
@@ -165,6 +171,11 @@ data class UiState(
     val themeMode: String = "light",
     /** 导航方向：true=前进（新页面从右滑入），false=返回（从左滑入） */
     val navForward: Boolean = true,
+    /**
+     * 二级页返回栈。进源体检/季度番剧/下载/人机验证时把当前屏压进来，
+     * 返回时弹回上一屏——否则这些页面点「返回」会没反应（back() 没有分支可落）。
+     */
+    val navStack: List<Screen> = emptyList(),
     val seasonYear: Int = 0,
     val seasonQuarter: Int = 0,
     val seasonItems: List<CatalogSubject> = emptyList(),
@@ -176,8 +187,13 @@ data class UiState(
     val healthKeyword: String = "",
     val healthDeep: Boolean = false,
     val alerts: List<EpisodeAlert> = emptyList(),
+    /** 下载队列（media3 Download 的投影）。 */
+    val downloads: List<DownloadItem> = emptyList(),
+    /** 下载页顶部的一次性提示，如"这一集还没解析出地址"。 */
+    val downloadTip: String = "",
 )
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
@@ -186,6 +202,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 起播前的收敛窗口，等更多源到齐再挑，避免选到同名第一季。 */
         const val AUTO_PLAY_SETTLE_MS = 1_200L
+
+        /** media3 的自定义暂停原因：非 NONE 即视为「用户手动暂停」。 */
+        const val PAUSE_STOP_REASON = 1
     }
 
     var state by mutableStateOf(UiState())
@@ -218,6 +237,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var gateCandidate: EpisodeGate? = null
     private val triedSources = mutableSetOf<String>()
 
+    /** 下载进度变化时把队列刷进界面状态。 */
+    private val downloadListener = object : androidx.media3.exoplayer.offline.DownloadManager.Listener {
+        override fun onDownloadChanged(
+            downloadManager: androidx.media3.exoplayer.offline.DownloadManager,
+            download: androidx.media3.exoplayer.offline.Download,
+            finalException: Exception?,
+        ) {
+            refreshDownloads()
+            val meta = DownloadUtil.decode(download.request)
+            val label = "${meta.subjectTitle} ${meta.episodeName}".trim()
+            when (download.state) {
+                androidx.media3.exoplayer.offline.Download.STATE_COMPLETED ->
+                    appendLog("下载完成：$label")
+
+                androidx.media3.exoplayer.offline.Download.STATE_FAILED ->
+                    state = state.copy(downloadTip = "下载失败：$label（${failureText(download.failureReason)}）")
+
+                else -> Unit
+            }
+        }
+
+        override fun onDownloadsPausedChanged(
+            downloadManager: androidx.media3.exoplayer.offline.DownloadManager,
+            downloadsPaused: Boolean,
+        ) {
+            refreshDownloads()
+        }
+    }
+
     init {
         loadRules()
         state = state.copy(
@@ -230,6 +278,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             watches = watchStore.load().sortedByDescending { it.updatedAt },
         )
         loadHome()
+        // 下载：缓存与队列必须在播放前就绪（播放器读的缓存和下载器写的是同一个）
+        runCatching {
+            DownloadUtil.setup(getApplication())
+            DownloadUtil.manager.addListener(downloadListener)
+        }
+        refreshDownloads()
     }
 
     // ---------- 索引 ----------
@@ -347,6 +401,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             navForward = true,
             detail = subject,
             detailOrigin = state.screen,
+            // 详情页自己也要能被返回：记下"是从哪一屏进来的"，
+            // 否则 首页→详情→播放→返回 会直接跳回首页，把详情页吃掉。
+            detailStack = state.detailStack + state.screen,
             hits = emptyList(),
             roads = emptyList(),
             error = null,
@@ -424,6 +481,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         state = state.copy(
             screen = Screen.Season,
             navForward = true,
+            navStack = state.navStack + state.screen,
             seasonYear = y,
             seasonQuarter = q,
             seasonItems = emptyList(),
@@ -494,6 +552,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun openHealth() {
         state = state.copy(
             screen = Screen.Health,
+            navForward = true,
+            navStack = state.navStack + state.screen,
             healthKeyword = state.keyword.ifBlank { state.playQuery },
             health = emptyList(),
         )
@@ -504,7 +564,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun closeHealth() {
-        state = state.copy(screen = Screen.Mine, navForward = true)
+        state = state.copy(
+            screen = state.navStack.lastOrNull() ?: Screen.Mine,
+            navForward = false,
+            navStack = state.navStack.dropLast(1),
+        )
     }
 
     /**
@@ -840,13 +904,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         triedSources.clear()
         state = state.copy(
             screen = Screen.Player,
-            playerBackTo = when (val origin = state.screen) {
-                // 从详情开播：返回目标是"详情从哪来的"（搜索/首页），
-                // 否则 详情(origin=播放) 和 播放(backTo=详情) 会互相指向，形成死循环。
-                Screen.Detail -> state.detailOrigin
-                Screen.Player -> state.playerBackTo
-                else -> origin
-            },
+            // 从详情开播 → 返回目标就是详情页；死循环由 detailStack 兜住（详情返回时弹栈）。
+            // 已经在播放页里换源/换集时保持原返回目标，否则会自己指向自己。
+            playerBackTo = if (state.screen == Screen.Player) state.playerBackTo else state.screen,
             detail = subject,
             playSubjectId = subject.id,
             title = subject.displayTitle,
@@ -1013,6 +1073,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val keyword = state.keyword.ifBlank { state.playQuery }
         state = state.copy(
             screen = Screen.Verify,
+            navForward = true,
+            // 从播放页的源面板也能进验证，返回必须回到播放页而不是搜索页
+            navStack = state.navStack + state.screen,
             verifyUrl = searchUrlFor(rule, keyword),
             verifyRuleName = rule.name,
             verifyDone = false,
@@ -1034,18 +1097,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("验证完成：${runCatching { java.net.URI(url).host }.getOrNull()} cookie=${cookie?.take(24).orEmpty()}")
         }
         val rule = state.rules.firstOrNull { it.name == state.verifyRuleName }
+        val back = state.navStack.lastOrNull() ?: Screen.Search
         state = state.copy(
-            screen = Screen.Search,
+            screen = back,
+            navForward = false,
+            navStack = state.navStack.dropLast(1),
             verifyUrl = "",
             verifyRuleName = "",
             verifyDone = false,
-            searchMode = SearchMode.Sources,
+            searchMode = if (back == Screen.Search) SearchMode.Sources else state.searchMode,
         )
         if (rule != null) retryRule(rule)
     }
 
     fun cancelVerify() {
-        state = state.copy(screen = Screen.Search, verifyUrl = "", verifyRuleName = "", verifyDone = false)
+        val back = state.navStack.lastOrNull() ?: Screen.Search
+        state = state.copy(
+            screen = back,
+            navForward = false,
+            navStack = state.navStack.dropLast(1),
+            verifyUrl = "",
+            verifyRuleName = "",
+            verifyDone = false,
+        )
     }
 
     /** 只重试这一条规则，不动其它源的结果。 */
@@ -1433,7 +1507,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun openDetailFromPlayer() {
         val subject = state.detail ?: return
         // 记下来源：从播放页进的详情，返回时要回播放页，而不是最初的首页/搜索
-        state = state.copy(screen = Screen.Detail, detailOrigin = Screen.Player, navForward = true)
+        state = state.copy(
+            screen = Screen.Detail,
+            detailOrigin = Screen.Player,
+            detailStack = state.detailStack + Screen.Player,
+            navForward = true,
+        )
         if (state.detailInfo == null) loadDetailInfo(subject.id)
     }
 
@@ -1788,6 +1867,179 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         search(keyword)
     }
 
+    // ---------- 下载 ----------
+
+    /** 进下载页。 */
+    fun openDownloads() {
+        refreshDownloads()
+        state = state.copy(
+            screen = Screen.Downloads,
+            navForward = true,
+            navStack = state.navStack + state.screen,
+            downloadTip = "",
+        )
+    }
+
+    fun refreshDownloads() {
+        if (!DownloadUtil.ready) return
+        viewModelScope.launch {
+            val list = withContext(Dispatchers.IO) {
+                runCatching { DownloadUtil.list() }.getOrDefault(emptyList())
+            }
+            state = state.copy(downloads = list)
+        }
+    }
+
+    /** 当前正在看的这一集的下载记录（没有则 null），用于播放页按钮状态。 */
+    fun downloadOfCurrent(): DownloadItem? {
+        val subjectId = state.playSubjectId
+        if (subjectId == 0) return null
+        return state.downloads.firstOrNull {
+            it.meta.subjectId == subjectId && it.meta.episodeIndex == state.playEpisodeIndex
+        }
+    }
+
+    /**
+     * 下载正在看的这一集。
+     *
+     * 必须等播放地址已经解析出来：下载要用真实的 m3u8/mp4 地址和它自己的请求头，
+     * 拿播放页 URL 去下只会下到一个 HTML。
+     */
+    fun downloadCurrentEpisode() {
+        val media = state.playMedia
+        if (media == null) {
+            state = state.copy(downloadTip = "还没解析出播放地址，等画面出来再点下载")
+            return
+        }
+        val subjectId = state.playSubjectId
+        if (subjectId == 0) {
+            state = state.copy(downloadTip = "调试播放不支持下载（缺少番剧信息）")
+            return
+        }
+        val epIndex = state.playEpisodeIndex
+        if (epIndex < 0) {
+            state = state.copy(downloadTip = "还没选中具体集数")
+            return
+        }
+        val key = DownloadUtil.cacheKey(subjectId, epIndex)
+        if (DownloadUtil.find(key) != null) {
+            state = state.copy(downloadTip = "这一集已经在下载列表里了")
+            return
+        }
+
+        val subject = state.detail
+        val road = state.roads.getOrNull(state.playRoadIndex)
+        val epName = road?.names?.getOrNull(epIndex) ?: "第${epIndex + 1}集"
+        val subjectTitle = subject?.displayTitle ?: state.title.substringBefore(" · ")
+        val meta = DownloadMeta(
+            subjectId = subjectId,
+            episodeIndex = epIndex,
+            episodeName = epName,
+            subjectTitle = subjectTitle,
+            cover = subject?.coverUrl.orEmpty(),
+            url = media.url,
+            headers = media.headers,
+        )
+
+        runCatching {
+            androidx.media3.exoplayer.offline.DownloadService.sendAddDownload(
+                getApplication(),
+                AppDownloadService::class.java,
+                DownloadUtil.buildRequest(meta),
+                /* foreground = */ true,
+            )
+        }.onSuccess {
+            state = state.copy(downloadTip = "")
+            appendLog("加入下载：$subjectTitle $epName")
+            refreshDownloads()
+        }.onFailure {
+            showError("下载没起来：${describe(it)}")
+        }
+    }
+
+    fun pauseDownload(id: String) {
+        runCatching {
+            androidx.media3.exoplayer.offline.DownloadService.sendSetStopReason(
+                getApplication(),
+                AppDownloadService::class.java,
+                id,
+                PAUSE_STOP_REASON,
+                false,
+            )
+        }
+        refreshDownloads()
+    }
+
+    fun resumeDownload(id: String) {
+        runCatching {
+            androidx.media3.exoplayer.offline.DownloadService.sendSetStopReason(
+                getApplication(),
+                AppDownloadService::class.java,
+                id,
+                androidx.media3.exoplayer.offline.Download.STOP_REASON_NONE,
+                false,
+            )
+        }
+        refreshDownloads()
+    }
+
+    fun removeDownload(id: String) {
+        runCatching {
+            androidx.media3.exoplayer.offline.DownloadService.sendRemoveDownload(
+                getApplication(),
+                AppDownloadService::class.java,
+                id,
+                false,
+            )
+        }
+        refreshDownloads()
+    }
+
+    fun removeAllDownloads() {
+        runCatching {
+            androidx.media3.exoplayer.offline.DownloadService.sendRemoveAllDownloads(
+                getApplication(),
+                AppDownloadService::class.java,
+                false,
+            )
+        }
+        state = state.copy(downloads = emptyList())
+    }
+
+    /** App 被杀过之后，media3 不会自己把没下完的重新排上，需要手动叫一下。 */
+    fun resumeAllDownloads() {
+        val pending = state.downloads.filter { !it.done && !it.failed && !it.removing }
+        pending.forEach { resumeDownload(it.id) }
+        appendLog("继续下载 ${pending.size} 个任务")
+    }
+
+    /** 播放已下载的一集：走缓存，不联网。 */
+    fun playDownload(item: DownloadItem) {
+        state = state.copy(
+            screen = Screen.Player,
+            title = "${item.meta.subjectTitle} · ${item.meta.episodeName}".trim(),
+            playPageUrl = "",
+            playMedia = PlayMedia(
+                url = item.meta.url,
+                headers = item.meta.headers,
+                note = "本地缓存",
+            ),
+            playStartMs = 0,
+            playPhase = PlayPhase.Playing,
+            playSubjectId = item.meta.subjectId,
+            playEpisodeIndex = item.meta.episodeIndex,
+            episodeNumber = item.meta.episodeIndex + 1,
+            roads = emptyList(),
+            playerBackTo = Screen.Downloads,
+            downloadTip = "",
+        )
+    }
+
+    private fun failureText(reason: Int): String = when (reason) {
+        androidx.media3.exoplayer.offline.Download.FAILURE_REASON_NONE -> "未知"
+        else -> "错误码 $reason"
+    }
+
     // ---------- 嗅探 ----------
 
     fun onSniffCandidate(url: String) {
@@ -1845,18 +2097,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 searchMode = if (state.playerBackTo == Screen.Search) SearchMode.Index else state.searchMode,
             )
 
+            Screen.Downloads -> state.copy(
+                screen = state.navStack.lastOrNull() ?: Screen.Mine,
+                navStack = state.navStack.dropLast(1),
+                downloadTip = "",
+            )
+
+            // 源体检 / 季度番剧 / 人机验证：统一弹栈回到进来时那一屏。
+            // 以前这三个没有分支，点「返回」什么都不会发生。
+            Screen.Health, Screen.Season, Screen.Verify -> state.copy(
+                screen = state.navStack.lastOrNull() ?: Screen.Mine,
+                navStack = state.navStack.dropLast(1),
+                verifyUrl = "",
+                verifyRuleName = "",
+                verifyDone = false,
+                downloadTip = "",
+            )
+
             Screen.Chapters -> state.copy(
                 screen = if (state.detail != null) Screen.Detail else Screen.Search,
                 roads = emptyList(),
             )
 
-            Screen.Detail -> if (state.detailOrigin == Screen.Player) {
-                // 从播放页来看详情：返回播放页，保留播放状态和已找到的源
-                state.copy(screen = Screen.Player)
-            } else {
+            // 弹回"打开详情前那一屏"：搜索/首页/季度表/播放页都能正确回去。
+            // 播放↔详情互相打开时，靠每次打开都压栈、返回都弹栈来断环。
+            Screen.Detail -> {
+                val target = state.detailStack.lastOrNull() ?: state.detailOrigin
                 state.copy(
-                    screen = state.detailOrigin,
-                    detail = null,
+                    screen = target,
+                    detailStack = state.detailStack.dropLast(1),
+                    // 回播放页要留着详情数据（播放页顶部还在用），回列表页才清
+                    detail = if (target == Screen.Player) state.detail else null,
                     hits = emptyList(),
                 )
             }

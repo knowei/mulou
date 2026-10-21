@@ -21,6 +21,8 @@ class AnimeApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         scheduleAlerts()
+        // 下载缓存尽早就绪：下载器写缓存、播放器读缓存，必须是同一个 SimpleCache 实例
+        runCatching { com.dmanime.app.download.DownloadUtil.setup(this) }
     }
 
     /**
