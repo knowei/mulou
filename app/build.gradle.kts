@@ -1,9 +1,34 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
+
+// 签名信息不进仓库，从 local.properties（或环境变量）读取。
+// 自备 keystore 后在本机 local.properties 里写，路径相对项目根：
+//   komo.storeFile=app/release.jks
+//   komo.storePassword=...
+//   komo.keyAlias=...
+//   komo.keyPassword=...
+// 也可用环境变量 KOMO_STORE_FILE / KOMO_STORE_PASSWORD / KOMO_KEY_ALIAS / KOMO_KEY_PASSWORD。
+// 缺任一项时不做 release 签名，assembleDebug 照常可用。
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+fun secret(key: String, env: String): String? =
+    localProps.getProperty(key)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+
+val storePath = secret("komo.storeFile", "KOMO_STORE_FILE")
+val storePass = secret("komo.storePassword", "KOMO_STORE_PASSWORD")
+val keyAliasName = secret("komo.keyAlias", "KOMO_KEY_ALIAS")
+val keyPass = secret("komo.keyPassword", "KOMO_KEY_PASSWORD")
+val canSign = storePath != null && storePass != null && keyAliasName != null && keyPass != null
 
 android {
     namespace = "com.dmanime.app"
@@ -17,12 +42,22 @@ android {
         versionName = "1.0"
     }
 
+    // 签名信息不进仓库。自备 keystore 后在本机 local.properties 里写（路径相对项目根）：
+    //   komo.storeFile=app/release.jks
+    //   komo.storePassword=...
+    //   komo.keyAlias=...
+    //   komo.keyPassword=...
+    // 也可以用同名环境变量 KOMO_STORE_FILE / KOMO_STORE_PASSWORD / KOMO_KEY_ALIAS / KOMO_KEY_PASSWORD。
+    // 缺任一项时不做 release 签名（assembleDebug 照常可用）。
+
     signingConfigs {
-        create("release") {
-            storeFile = file("release.jks")
-            storePassword = "fancang2026"
-            keyAlias = "fancang"
-            keyPassword = "fancang2026"
+        if (canSign) {
+            create("release") {
+                storeFile = rootProject.file(storePath!!)
+                storePassword = storePass
+                keyAlias = keyAliasName
+                keyPassword = keyPass
+            }
         }
     }
 
@@ -30,7 +65,7 @@ android {
         release {
             isMinifyEnabled = false
             isShrinkResources = false
-            signingConfig = signingConfigs.getByName("release")
+            if (canSign) signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
