@@ -175,6 +175,10 @@ data class UiState(
     val danmakuOn: Boolean = true,
     val danmakuAlpha: Float = 0.92f,
     val danmakuScale: Float = 1f,
+    /** 弹幕占视频画面的高度比例：0.3 只在顶部一窄条，1.0 铺满整个画面。 */
+    val danmakuArea: Float = 0.62f,
+    /** 滚动速度倍率：1.0 正常，越大越快。 */
+    val danmakuSpeed: Float = 1f,
     /** 手动对齐用的时间偏移（毫秒）。片头长短不一，自动对不准时让用户自己挪。 */
     val danmakuOffsetMs: Long = 0,
     val danmakuComments: List<Danmaku> = emptyList(),
@@ -299,6 +303,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             danmakuOn = uiPrefs.getBoolean("danmaku_on", true),
             danmakuAlpha = uiPrefs.getFloat("danmaku_alpha", 0.92f),
             danmakuScale = uiPrefs.getFloat("danmaku_scale", 1f),
+            danmakuArea = uiPrefs.getFloat("danmaku_area", 0.62f),
+            danmakuSpeed = uiPrefs.getFloat("danmaku_speed", 1f),
             danmakuOffsetMs = uiPrefs.getLong("danmaku_offset", 0L),
             alerts = alertStore.load(),
             searchHistory = searchPrefs.getString("history", null)
@@ -2226,6 +2232,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val clamped = value.coerceIn(0.6f, 2f)
         uiPrefs.edit().putFloat("danmaku_scale", clamped).apply()
         state = state.copy(danmakuScale = clamped)
+    }
+
+    /** 弹幕区高度占比：太小挤成一条，铺满整个画面又会盖住字幕。 */
+    fun setDanmakuArea(value: Float) {
+        val clamped = value.coerceIn(0.3f, 1f)
+        uiPrefs.edit().putFloat("danmaku_area", clamped).apply()
+        state = state.copy(danmakuArea = clamped)
+    }
+
+    fun setDanmakuSpeed(value: Float) {
+        val clamped = value.coerceIn(0.6f, 1.6f)
+        uiPrefs.edit().putFloat("danmaku_speed", clamped).apply()
+        state = state.copy(danmakuSpeed = clamped)
     }
 
     /** 手动对齐：片头长度各家不一样，自动排不齐时让用户自己挪。 */

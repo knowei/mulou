@@ -66,6 +66,8 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -2941,6 +2943,8 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                     alpha = state.danmakuAlpha,
                     textScale = state.danmakuScale,
                     offsetMs = state.danmakuOffsetMs,
+                    area = state.danmakuArea,
+                    speedFactor = state.danmakuSpeed,
                 )
                 PlayerOverlay(
                     player = exoPlayer,
@@ -2988,6 +2992,8 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                         alpha = state.danmakuAlpha,
                         textScale = state.danmakuScale,
                         offsetMs = state.danmakuOffsetMs,
+                        area = state.danmakuArea,
+                        speedFactor = state.danmakuSpeed,
                     )
                     PlayerOverlay(
                         player = exoPlayer,
@@ -3297,6 +3303,69 @@ private fun PlayerInfoCard(vm: AppViewModel, state: UiState) {
     }
 }
 
+/** 设置项一行：标签 + 滑条 + 当前值。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DanmakuSliderRow(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    display: String,
+    onChange: (Float) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(52.dp))
+        Slider(
+            value = value,
+            onValueChange = onChange,
+            valueRange = range,
+            colors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+                inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                activeTickColor = Color.Transparent,
+                inactiveTickColor = Color.Transparent,
+            ),
+            // 默认会在轨道右端画一个"停靠点"，看着像没对齐的圆点，去掉
+            track = { sliderState ->
+                SliderDefaults.Track(
+                    sliderState = sliderState,
+                    colors = SliderDefaults.colors(
+                        activeTrackColor = MaterialTheme.colorScheme.primary,
+                        inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                    drawStopIndicator = null,
+                )
+            },
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 2.dp),
+        )
+        Text(
+            display,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.End,
+            modifier = Modifier.width(44.dp),
+        )
+    }
+}
+
+/** 时间轴微调按钮：默认 TextButton 的内边距太宽，五个挤不下一行。 */
+@Composable
+private fun DanmakuOffsetButton(label: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+        modifier = Modifier.height(34.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
 /**
  * 播放页的弹幕设置。
  *
@@ -3343,7 +3412,7 @@ private fun DanmakuSettingsCard(vm: AppViewModel, state: UiState) {
         Spacer(Modifier.height(4.dp))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("显示", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp))
+            Text("显示", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(52.dp))
             FilterChip(
                 selected = state.danmakuOn,
                 onClick = { if (!state.danmakuOn) vm.toggleDanmaku() },
@@ -3357,47 +3426,65 @@ private fun DanmakuSettingsCard(vm: AppViewModel, state: UiState) {
             )
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("浓度", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp))
-            listOf(0.55f to "淡", 0.85f to "中", 1f to "浓").forEach { (value, label) ->
-                FilterChip(
-                    selected = kotlin.math.abs(state.danmakuAlpha - value) < 0.01f,
-                    onClick = { vm.setDanmakuAlpha(value) },
-                    label = { Text(label) },
-                )
-                Spacer(Modifier.width(6.dp))
-            }
-        }
+        DanmakuSliderRow(
+            label = "透明度",
+            value = state.danmakuAlpha,
+            range = 0.2f..1f,
+            display = "${(state.danmakuAlpha * 100).toInt()}%",
+            onChange = { vm.setDanmakuAlpha(it) },
+        )
+
+        DanmakuSliderRow(
+            label = "字号",
+            value = state.danmakuScale,
+            range = 0.6f..2f,
+            display = "${(state.danmakuScale * 100).toInt()}%",
+            onChange = { vm.setDanmakuScale(it) },
+        )
+
+        DanmakuSliderRow(
+            label = "显示区域",
+            value = state.danmakuArea,
+            range = 0.3f..1f,
+            display = "${(state.danmakuArea * 100).toInt()}%",
+            onChange = { vm.setDanmakuArea(it) },
+        )
+
+        DanmakuSliderRow(
+            label = "速度",
+            value = state.danmakuSpeed,
+            range = 0.6f..1.6f,
+            display = "%.1f×".format(state.danmakuSpeed),
+            onChange = { vm.setDanmakuSpeed(it) },
+        )
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("字号", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp))
-            listOf(0.8f to "小", 1f to "中", 1.3f to "大").forEach { (value, label) ->
-                FilterChip(
-                    selected = kotlin.math.abs(state.danmakuScale - value) < 0.01f,
-                    onClick = { vm.setDanmakuScale(value) },
-                    label = { Text(label) },
-                )
-                Spacer(Modifier.width(6.dp))
-            }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("对齐", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp))
-            TextButton(onClick = { vm.shiftDanmakuOffset(-1_000) }) { Text("−1s") }
-            val seconds = state.danmakuOffsetMs / 1000.0
+            Text("时间轴", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(52.dp))
+            DanmakuOffsetButton("−1s") { vm.shiftDanmakuOffset(-1_000) }
+            DanmakuOffsetButton("−0.2s") { vm.shiftDanmakuOffset(-200) }
             Text(
-                if (state.danmakuOffsetMs == 0L) "正好" else "%.1fs".format(seconds),
+                text = if (state.danmakuOffsetMs == 0L) {
+                    "正好"
+                } else {
+                    "%.1fs".format(state.danmakuOffsetMs / 1000.0)
+                },
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (state.danmakuOffsetMs == 0L) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { vm.resetDanmakuOffset() },
             )
-            TextButton(onClick = { vm.shiftDanmakuOffset(1_000) }) { Text("+1s") }
-            if (state.danmakuOffsetMs != 0L) {
-                TextButton(onClick = { vm.resetDanmakuOffset() }) { Text("归零") }
-            }
+            DanmakuOffsetButton("+0.2s") { vm.shiftDanmakuOffset(200) }
+            DanmakuOffsetButton("+1s") { vm.shiftDanmakuOffset(1_000) }
         }
 
         Text(
-            "对不上时用「对齐」把弹幕整体挪一挪；换番或换源后集号错位，点下面重新匹配。",
+            "对不上时用「时间轴」把弹幕整体挪一挪（点中间的数值可以归零）；换番或换源后集号错位，点下面重新匹配。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -36,6 +36,8 @@ fun DanmakuLayer(
     alpha: Float,
     textScale: Float,
     offsetMs: Long,
+    area: Float = 0.62f,
+    speedFactor: Float = 1f,
     modifier: Modifier = Modifier,
 ) {
     if (!enabled || comments.isEmpty() || player == null || alpha <= 0.01f) return
@@ -56,11 +58,11 @@ fun DanmakuLayer(
         }
     }
 
-    val plan = remember(comments, size.width, size.height, textScale) {
+    val plan = remember(comments, size.width, size.height, textScale, area, speedFactor) {
         if (size.width == 0 || size.height == 0) {
             LanePlan(emptyList(), emptyList(), 0f, 1f, 0f)
         } else {
-            buildPlan(comments, size.width.toFloat(), size.height.toFloat(), textScale, paint)
+            buildPlan(comments, size.width.toFloat(), size.height.toFloat(), textScale, area, speedFactor, paint)
         }
     }
 
@@ -144,6 +146,8 @@ private fun buildPlan(
     width: Float,
     height: Float,
     textScale: Float,
+    area: Float,
+    speedFactor: Float,
     paint: Paint,
 ): LanePlan {
     val textSize = min(width / 26f, 60f) * textScale.coerceIn(0.6f, 2f)
@@ -153,14 +157,16 @@ private fun buildPlan(
     val lineHeight = textSize * 1.45f
     // 顶部留一行给播放器的「弹幕 开」按钮，别让第一条弹幕压在它下面
     val topInset = lineHeight
-    // 上半屏留给滚动弹幕：下半屏容易被字幕和人脸挡
-    val laneCount = max(1, ((height * 0.62f - topInset) / lineHeight).toInt())
+    // 弹幕只铺画面上部：铺满整屏会盖住字幕和人脸
+    val usableHeight = height * area.coerceIn(0.2f, 1f)
+    val laneCount = max(1, ((usableHeight - topInset) / lineHeight).toInt())
     // 轨道分池：顶部固定弹幕吃最上面一条，剩下给滚动（顶部固定弹幕在 B 站占比很低，
     // 留两条会让首屏空一行）；底部固定弹幕走 0.62h 以下那块空白，和滚动区不重叠。
     val topLanes = if (laneCount >= 6) 1 else 0
-    val bottomLanes = if (laneCount >= 6) 2 else 0
+    // 底部固定弹幕落在弹幕区下方那块空白里；铺满整个画面时就没地方给它了，直接不出
+    val bottomLanes = if (laneCount >= 6 && area < 0.9f) 2 else 0
     val scrollLanes = max(1, laneCount - topLanes)
-    val speed = (width + 960f) / SCROLL_DURATION_MS
+    val speed = (width + 960f) / (SCROLL_DURATION_MS / speedFactor.coerceIn(0.5f, 2f))
 
     val scroll = ArrayList<Line>(comments.size)
     val fixed = ArrayList<Line>()
