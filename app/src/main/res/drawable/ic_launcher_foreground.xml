@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 番仓：一个"仓库盒"里放着播放键 —— 索引（仓）+ 播放。 -->
+<!-- 早期图标（已被 mipmap-anydpi-v26 的木漏图标取代），保留避免旧系统解析失败。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"

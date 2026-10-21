@@ -2281,10 +2281,16 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
             ) {
                 Column(Modifier.padding(14.dp)) {
                     Text(
-                        "番仓 ${BuildConfig.VERSION_NAME} · 自用",
+                        "木漏 Komo ${BuildConfig.VERSION_NAME} · 自用",
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Spacer(Modifier.height(4.dp))
+                    Text(
+                        "名字取自「木漏れ日」：树叶间漏下来的光。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         "应用不内置任何片源，所有内容来自你导入的规则；番剧元数据来自 Bangumi，更新时间来自 AniList。",
                         style = MaterialTheme.typography.bodySmall,

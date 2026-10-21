@@ -659,7 +659,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val empty = list.count { it.status == "empty" }
         val failed = list.count { it.status == "error" }
         return buildString {
-            appendLine("番仓 · 源体检")
+            appendLine("木漏 · 源体检")
             appendLine("关键词：${state.healthKeyword}")
             appendLine("模式：${if (state.healthDeep) "深检（搜索 + 取线路）" else "浅检（仅搜索）"}")
             appendLine("结果：可用 $ok · 空 $empty · 失败 $failed（共 ${list.size}）")
