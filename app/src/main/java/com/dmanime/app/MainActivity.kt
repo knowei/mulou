@@ -9,6 +9,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
@@ -114,6 +115,7 @@ import coil.compose.AsyncImage
 import com.dmanime.app.danmaku.DanmakuLayer
 import com.dmanime.app.download.DownloadItem
 import com.dmanime.app.download.humanSize
+import com.dmanime.catalog.AiringState
 import com.dmanime.catalog.CatalogSubject
 import com.dmanime.danmaku.DanmakuOrigin
 import com.dmanime.rules.model.AnimeRule
@@ -851,14 +853,7 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
 
         // 选集入口：点开弹出集数面板（后台先找源，找到直接铺集数）
         if (!fromPlayer) item {
-            val total = info?.totalEpisodes ?: 0
-            val aired = info?.eps ?: 0
-            val summaryText = when {
-                total > 0 && aired in 1 until total -> "更新至 $aired 集 / 共 $total 集"
-                total > 0 -> "共 $total 集"
-                aired > 0 -> "已更新 $aired 集"
-                else -> ""
-            }
+            val summaryText = AiringState.summary(info)
             OutlinedButton(
                 onClick = vm::openEpisodeSheet,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -980,12 +975,17 @@ private fun EpisodeSheet(vm: AppViewModel, state: UiState) {
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             chunk.forEach { index ->
-                                val label = road.names.getOrNull(index) ?: "${index + 1}"
-                                AssistChip(
+                                EpisodeChip(
+                                    text = road.names.getOrNull(index) ?: "${index + 1}",
+                                    current = road === state.roads.getOrNull(state.playRoadIndex) &&
+                                        index == state.playEpisodeIndex,
+                                    available = true,
+                                    sourceBehind = false,
                                     onClick = { vm.pickEpisode(road, index) },
-                                    label = { Text(label) },
+                                    modifier = Modifier.weight(1f),
                                 )
                             }
+                            repeat(4 - chunk.size) { Spacer(Modifier.weight(1f)) }
                         }
                     }
                 }
@@ -2362,6 +2362,57 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
     }
 }
 
+/**
+ * 集数格子。
+ *
+ * 固定高度 + `weight(1f)` 均分一行，不用 AssistChip：Chip 的宽度跟着文字走，
+ * 「1」和「第 12 集」摆在一行里宽窄不一，看着很乱。
+ */
+@Composable
+private fun EpisodeChip(
+    text: String,
+    current: Boolean,
+    available: Boolean,
+    sourceBehind: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val container = when {
+        current -> MaterialTheme.colorScheme.primaryContainer
+        available -> MaterialTheme.colorScheme.surfaceVariant
+        sourceBehind -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        else -> MaterialTheme.colorScheme.surface
+    }
+    val label = when {
+        current -> MaterialTheme.colorScheme.onPrimaryContainer
+        available -> MaterialTheme.colorScheme.onSurface
+        sourceBehind -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+    }
+    val border = MaterialTheme.colorScheme.outlineVariant
+        .copy(alpha = if (current || available) 0.9f else 0.35f)
+
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = container,
+        border = BorderStroke(1.dp, border),
+        // 极淡的描边让灰格和浅色背景分得开；不要阴影，格子会显得肿
+        modifier = modifier.height(36.dp),
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                text = text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.labelLarge,
+                color = label,
+            )
+        }
+    }
+}
+
 @Composable
 private fun StatChip(value: String, label: String) {
     Column(
@@ -2960,6 +3011,11 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
     DisposableEffect(sniffer) {
         onDispose { sniffer.destroy() }
     }
+    // 地址一到手就拆掉嗅探页：这类站的播放页常挂着广告跳转（整页跳走那种），
+    // 留着 WebView 只会白烧流量和内存。
+    LaunchedEffect(state.playMedia) {
+        if (state.playMedia != null) sniffer.destroy()
+    }
 
     // 起播看门狗：15 秒还嗅不到播放地址就换源，别让用户卡在"正在起播"
     LaunchedEffect(state.playPageUrl, state.playMedia) {
@@ -3183,9 +3239,11 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                         ) {
                             Text("选集", style = MaterialTheme.typography.titleSmall)
                             Spacer(Modifier.width(8.dp))
-                            val totalEps = state.detailInfo?.totalEpisodes ?: 0
+                            val totalEps = AiringState.totalEpisodes(state.detailInfo)
                             Text(
-                                if (totalEps > episodes) "本站 $episodes 集 / 全 $totalEps 集"
+                                // 集数有两个来源，混在一起容易看糊涂：片源给的是它自己有
+                                // 几集，全 N 集是官方总集数。少集时把两边都写出来。
+                                if (totalEps > episodes) "片源 $episodes 集 / 全 $totalEps 集"
                                 else "${road.name} · $episodes 集",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -3202,8 +3260,10 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                     // 集数多时按 24 集分组，避免一次铺出上百个 chip
                     // 三态：可播 / 源未更新（官方已播）/ 还没播出
                     // 后两种只多铺一段（最多 12 个），不做无限幽灵格
-                    val totalEps = state.detailInfo?.totalEpisodes ?: 0
-                    val expected = state.detailInfo?.eps ?: episodes
+                    val totalEps = AiringState.totalEpisodes(state.detailInfo)
+                    // 完结作品不再铺"还没播"的幽灵格：expected 取已播集数，
+                    // 完结时它等于总集数，正好只铺到最后一集
+                    val expected = AiringState.airedCount(state.detailInfo).takeIf { it > 0 } ?: episodes
                     val ghost = when {
                         totalEps > episodes -> minOf(totalEps, episodes + 12)
                         expected > episodes -> minOf(expected, episodes + 12)
@@ -3229,36 +3289,21 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                             ) {
                                 chunk.forEach { index ->
                                     val available = index < episodes
-                                    val current = available && index == state.playEpisodeIndex
-                                    val text = road.names.getOrNull(index) ?: "${index + 1}"
-                                    AssistChip(
+                                    EpisodeChip(
+                                        text = road.names.getOrNull(index) ?: "${index + 1}",
+                                        current = available && index == state.playEpisodeIndex,
+                                        available = available,
+                                        // 源还没跟上的集数：灰一点，点开是"还没更新"提示
+                                        sourceBehind = !available && index < expected,
                                         onClick = {
                                             if (available) vm.play(road, index)
                                             else vm.showGateFor(index + 1)
                                         },
-                                        label = { Text(text) },
-                                        colors = when {
-                                            current -> AssistChipDefaults.assistChipColors(
-                                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                                labelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            )
-
-                                            available -> AssistChipDefaults.assistChipColors()
-
-                                            // 源还没跟上的集数：灰一点，点开是"还没更新"提示
-                                            index < expected -> AssistChipDefaults.assistChipColors(
-                                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-                                            )
-
-                                            // 官方都还没播：更淡
-                                            else -> AssistChipDefaults.assistChipColors(
-                                                containerColor = MaterialTheme.colorScheme.surface,
-                                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
-                                            )
-                                        },
+                                        modifier = Modifier.weight(1f),
                                     )
                                 }
+                                // 最后一行不满 4 个也占满 4 格宽度，整片格子才对得齐
+                                repeat(4 - chunk.size) { Spacer(Modifier.weight(1f)) }
                             }
                         }
                     }
@@ -3288,16 +3333,10 @@ private fun PlayerInfoCard(vm: AppViewModel, state: UiState) {
         vm.localCoverPath(state.playSubjectId)?.let { File(it) }?.takeIf { it.exists() }
     }
     val cover = localCover ?: (subject?.coverUrlSmall ?: "").withImageBase(state.imageBase)
-    val total = info?.totalEpisodes ?: 0
-    val aired = info?.eps ?: 0
-
     val meta = buildList {
         info?.rating?.score?.takeIf { it > 0f }?.let { add("%.1f 分".format(it)) }
-        when {
-            total > 0 && aired in 1 until total -> add("更新至 $aired 集 / 共 $total 集")
-            total > 0 -> add("共 $total 集")
-            aired > 0 -> add("更新至 $aired 集")
-        }
+        // 集数说明走 AiringState：完结作品不再写"更新至 N 集"，否则会和"已完结"打架
+        AiringState.summary(info).takeIf { it.isNotEmpty() }?.let { add(it) }
     }.joinToString(" · ")
 
     Row(

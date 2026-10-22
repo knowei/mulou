@@ -5,6 +5,7 @@ import com.dmanime.rules.error.HttpStatusException
 import com.dmanime.rules.model.AnimeRule
 import com.dmanime.rules.model.ChaptersOutcome
 import com.dmanime.rules.model.SearchOutcome
+import com.dmanime.rules.net.HttpRequest
 import com.dmanime.rules.net.HttpUrlConnectionClient
 import com.dmanime.rules.net.RuleHttpClient
 
@@ -73,4 +74,16 @@ class RuleEngine(
             rawResponse = response.body,
         )
     }
+
+    /**
+     * 抓一集播放页的 HTML，只为了看一眼里面有没有明文媒体地址（见 [MacCmsPlayer]）。
+     *
+     * 拿不到就返回 null——调用方把它当作"可能更快的一条路"，失败要能无声退回嗅探，
+     * 所以这里不抛异常。
+     */
+    fun fetchPage(url: String, referer: String = ""): String? = runCatching {
+        val headers = if (referer.isBlank()) emptyMap() else mapOf("Referer" to referer)
+        val response = http.execute(HttpRequest(url = url, headers = headers))
+        if (response.status in 200..299) response.body else null
+    }.getOrNull()
 }

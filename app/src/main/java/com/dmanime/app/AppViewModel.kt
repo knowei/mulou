@@ -23,6 +23,7 @@ import com.dmanime.catalog.SubjectDetail
 import com.dmanime.danmaku.Danmaku
 import com.dmanime.danmaku.DanmakuOrigin
 import com.dmanime.rules.css1.Css1Converter
+import com.dmanime.rules.engine.MacCmsPlayer
 import com.dmanime.rules.engine.RuleEngine
 import com.dmanime.rules.model.AnimeRule
 import com.dmanime.rules.model.Road
@@ -1947,6 +1948,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         )
         danmakuLoadedKey = ""
         appendLog("打开播放页: $url")
+        probeEmbeddedMedia(url)
+    }
+
+    /**
+     * MacCMS 系的播放页把媒体地址明文写在 `player_aaaa` 里，先花一次 HTTP 试直达。
+     *
+     * 这些站的广告脚本爱在主框架里整页跳走（实测叽哔动漫会跳到广告落地页），
+     * WebView 嗅探经常空手而归、白等 15 秒。命中就跳过嗅探；没命中毫无影响，
+     * 照旧等嗅探结果。
+     */
+    private fun probeEmbeddedMedia(pageUrl: String) {
+        if (!pageUrl.startsWith("http", ignoreCase = true)) return
+        viewModelScope.launch {
+            val media = withContext(Dispatchers.IO) {
+                val html = engine.fetchPage(pageUrl, referer = pageUrl) ?: return@withContext null
+                MacCmsPlayer.embeddedMediaUrl(html, pageUrl)
+            } ?: return@launch
+            // 用户可能已经换集/换源，别把上一集的地址塞进来
+            if (state.playPageUrl != pageUrl || state.playMedia != null) return@launch
+            appendLog("播放页内嵌地址: $media")
+            onSniffCandidate(media)
+        }
     }
 
     /**
