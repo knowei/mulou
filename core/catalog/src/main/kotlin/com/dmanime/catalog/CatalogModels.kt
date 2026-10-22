@@ -1,4 +1,4 @@
-﻿package com.dmanime.catalog
+package com.dmanime.catalog
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -118,7 +118,14 @@ data class SubjectDetail(
     val name: String = "",
     @SerialName("name_cn") val nameCn: String = "",
     val summary: String = "",
-    @SerialName("air_date") val airDate: String = "",
+    /**
+     * 首播日。详情接口 `GET /v0/subjects/{id}` 用 `date`，日历/搜索接口用
+     * `air_date` —— 这里原来只写了 `air_date`，于是详情页的 `airDate` 永远是空，
+     * 连带"这部番播完了没有"一直判成没播完（约定的梦幻岛 第二季 11 集全播完，
+     * 界面还写着"更新至 11 集 / 共 12 集"）。两个字段名都吃。
+     */
+    @SerialName("date") val airDate: String = "",
+    @SerialName("air_date") val airDateAlt: String = "",
     val eps: Int = 0,
     @SerialName("total_episodes") val totalEpisodes: Int = 0,
     val platform: String = "",
@@ -142,8 +149,14 @@ data class SubjectDetail(
             .orEmpty()
             .replace("http://", "https://")
 
-    /** 有总集数用总集数，否则用已播集数。 */
-    val episodeCount: Int get() = if (totalEpisodes > 0) totalEpisodes else eps
+    /** 首播日：`date` 优先，缺了再看 `air_date`。 */
+    val effectiveAirDate: String get() = airDate.ifBlank { airDateAlt }
+
+    /**
+     * 实际集数。走 [AiringState.totalEpisodes]：完结番以 `eps` 为准，
+     * 免得"计划 12 集、只播了 11 集"的作品永远卡在"更新至 11 / 共 12"。
+     */
+    val episodeCount: Int get() = AiringState.totalEpisodes(this)
 
     val episodeLabel: String
         get() = when {

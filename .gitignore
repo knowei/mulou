@@ -24,3 +24,4 @@ dist/rules*.md
 .idea/
 *.iml
 .workbuddy/
+__pycache__/

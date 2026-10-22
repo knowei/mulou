@@ -1,5 +1,6 @@
 package com.dmanime.catalog
 
+import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -65,5 +66,21 @@ class AiringStateTest {
         assertEquals("", AiringState.summary(null))
         assertEquals("12 集", AiringState.summary(null, sourceEpisodes = 12))
         assertEquals(0, AiringState.airedCount(null))
+    }
+
+    /**
+     * 详情接口 `GET /v0/subjects/{id}` 用的是 `date`，不是 `air_date`。
+     * 早先这里只认 `air_date`，导致 `airDate` 永远为空、`finished()` 永远 false，
+     * 于是"约定的梦幻岛 第二季"播完了还写着"更新至 11 集 / 共 12 集"。
+     */
+    @Test
+    fun `detail json exposes the date field`() {
+        val body = """
+            {"id":279202,"name":"約束のネバーランド Season 2","name_cn":"约定的梦幻岛 第二季",
+             "date":"2021-01-07","eps":11,"total_episodes":12,"platform":"TV"}
+        """.trimIndent()
+        val detail = Json { ignoreUnknownKeys = true }.decodeFromString<SubjectDetail>(body)
+        assertEquals("2021-01-07", detail.effectiveAirDate)
+        assertTrue(AiringState.finished(detail, LocalDate.of(2021, 4, 1)))
     }
 }

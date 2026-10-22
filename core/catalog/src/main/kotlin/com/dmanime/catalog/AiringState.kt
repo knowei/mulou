@@ -17,9 +17,9 @@ object AiringState {
 
     fun finished(info: SubjectDetail?, today: LocalDate = LocalDate.now()): Boolean {
         if (info == null) return false
-        val total = totalEpisodes(info)
+        val total = plannedEpisodes(info)
         if (total <= 0) return false
-        val start = parseDate(info.airDate) ?: return false
+        val start = parseDate(info.effectiveAirDate) ?: return false
         if (total == 1 || info.platform == "剧场版") return !today.isBefore(start)
         val last = start.plusWeeks((total - 1).toLong())
         return today.isAfter(last)
@@ -52,10 +52,19 @@ object AiringState {
         }
     }
 
-    fun totalEpisodes(info: SubjectDetail?): Int {
+    /** Bangumi 上标的集数（`total_episodes`），是"计划集数"。 */
+    fun plannedEpisodes(info: SubjectDetail?): Int {
         if (info == null) return 0
         return if (info.totalEpisodes > 0) info.totalEpisodes else info.eps
     }
+
+    /**
+     * 总集数。这里只信 Bangumi 的字段，**不做推断**：
+     * `total_episodes` 是计划集数，`eps` 是已播话数，两者不一致时（「约定的梦幻岛
+     * 第二季」计划 12 集、实际只播 11 集）谁对谁错光看这两个数分不出来，
+     * 只能靠 `/v0/episodes` 的条数校正——那一步在 CatalogRepository.episodeCountOf。
+     */
+    fun totalEpisodes(info: SubjectDetail?): Int = plannedEpisodes(info)
 
     fun parseDate(raw: String): LocalDate? {
         val text = raw.trim().take(10)

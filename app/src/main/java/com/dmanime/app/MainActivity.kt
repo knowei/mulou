@@ -745,7 +745,7 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
                     val meta = buildList {
                         if (info?.episodeLabel?.isNotEmpty() == true) add(info.episodeLabel)
                         if (!info?.platform.isNullOrEmpty()) add(info.platform)
-                        val date = info?.airDate?.takeIf { it.isNotEmpty() } ?: subject.airDate
+                        val date = info?.effectiveAirDate?.takeIf { it.isNotEmpty() } ?: subject.airDate
                         if (date.isNotEmpty()) add("放送 $date")
                     }
                     meta.forEach {

@@ -14,6 +14,7 @@ import com.dmanime.app.download.DownloadUtil
 import com.dmanime.app.download.SubjectMeta
 import com.dmanime.app.download.SubjectMetaStore
 import com.dmanime.app.danmaku.DanmakuRepository
+import com.dmanime.catalog.AiringState
 import com.dmanime.catalog.CalendarDay
 import com.dmanime.catalog.CatalogSubject
 import com.dmanime.catalog.SubjectCharacter
@@ -246,6 +247,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 一次最多探几部，避免一口气把站点打成筛子。 */
         const val MAX_WATCH_PROBES = 4
+
+        /** 集号：认得 "第5.5集"、"05"、"EP12" 这类写法，第一组是数字本体（可带小数）。 */
+        val EPISODE_NO = Regex("""第?\s*(\d+(?:\.\d+)?)""")
     }
 
     var state by mutableStateOf(UiState())
@@ -482,8 +486,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         state = state.copy(detailLoading = true)
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { catalog.subjectDetail(id) } }
-            result.onSuccess { detail ->
+            result.onSuccess { raw ->
+                val detail = withContext(Dispatchers.IO) { fixEpisodeCount(raw) }
                 state = state.copy(detailInfo = detail, detailLoading = false)
+                if (detail.totalEpisodes in 1 until raw.totalEpisodes) {
+                    appendLog("集数校正：Bangumi 计划 ${raw.totalEpisodes} 集，实际放送 ${detail.totalEpisodes} 集")
+                }
                 mergeWatchMeta(detail)
                 state.detail?.let { loadAiring(it) }
             }.onFailure {
@@ -503,9 +511,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ---------- 源体检 ----------
+    /**
+     * 「计划 12 集、实际只播了 11 集」的作品（约定的梦幻岛 第二季就是这样），
+     * Bangumi 的 `total_episodes` 还停在计划值，界面上就会永远写
+     * "更新至 11 集 / 共 12 集"。已经放完的番用 `/v0/episodes` 的条数校正一次。
+     * 还在播的不动：那时 ep 列表只有已播的那几条，拿它当总集数会把"共 12 集"削成"共 3 集"。
+     */
+    private fun fixEpisodeCount(detail: SubjectDetail): SubjectDetail {
+        if (detail.eps <= 0 || detail.totalEpisodes <= detail.eps) return detail
+        if (!AiringState.finished(detail)) return detail
+        val actual = runCatching { catalog.episodeCountOf(detail.id) }.getOrElse {
+            android.util.Log.w("dmanime", "集数校正失败：${it::class.simpleName} ${it.message}")
+            0
+        }
+        if (actual >= detail.eps && actual < detail.totalEpisodes) {
+            return detail.copy(totalEpisodes = actual)
+        }
+        return detail
+    }
 
-    // ---------- 季度番剧表 ----------
+    // ---------- 源体检 ----------    // ---------- 季度番剧表 ----------
 
     private fun currentSeason(): Pair<Int, Int> {
         val now = java.time.LocalDate.now()
@@ -1651,8 +1676,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return null
     }
 
-    private fun parseEpisodeNumber(name: String?): Int? =
-        name?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
+    /**
+     * 集号解析。要能认出 "5.5" 这种半集：片源里常把总集篇/OVA 插在正片中间
+     * （第5集、第5.5集、第6集），当整数读会把 5.5 当成第 5 集，
+     * 于是点"第5集"播到特别篇、点"第6集"播到第 5 集，整条线错位一格。
+     */
+    private fun parseEpisodeNo(name: String?): Double? {
+        val text = name ?: return null
+        val match = EPISODE_NO.find(text) ?: return null
+        return match.groupValues[1].toDoubleOrNull()
+    }
+
+    /** 只认整数集号：5.5 集既不顶替第 5 集，也不顶替第 6 集。 */
+    private fun parseEpisodeNumber(name: String?): Int? {
+        val no = parseEpisodeNo(name) ?: return null
+        val whole = no.toInt()
+        return whole.takeIf { no == it.toDouble() }
+    }
 
     // ---------- 规则 ----------
 
@@ -1937,7 +1977,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             playRoadIndex = state.roads.indexOf(road).coerceAtLeast(0),
             playEpisodeIndex = index,
             playStartMs = resumePositionFor(index),
-            episodeNumber = parseEpisodeNumber(episode) ?: (index + 1),
+            // 半集（第5.5集）按 5 算：「第 N 集」这套整数语义里没有 5.5 的位置，
+            // 但标题上仍显示片源原文，用户看得出这是特别篇
+            episodeNumber = parseEpisodeNo(episode)?.toInt() ?: (index + 1),
             playPhase = PlayPhase.Starting,
             // 换集就把上一集的弹幕清掉，等新的这条流起来再拉
             danmakuComments = emptyList(),
@@ -2149,7 +2191,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 summary = info?.summary?.ifBlank { null } ?: subject?.summary.orEmpty(),
                 coverUrl = coverUrl,
                 totalEpisodes = info?.episodeCount ?: 0,
-                airDate = info?.airDate ?: subject?.airDate.orEmpty(),
+                airDate = info?.effectiveAirDate ?: subject?.airDate.orEmpty(),
                 rating = (info?.rating?.score ?: 0.0).takeIf { it > 0 }
                     ?: (subject?.rating?.score ?: 0.0),
                 tags = info?.tags?.map { it.name }?.take(8).orEmpty(),

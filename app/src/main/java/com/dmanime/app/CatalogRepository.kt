@@ -1,4 +1,4 @@
-﻿package com.dmanime.app
+package com.dmanime.app
 
 import android.content.Context
 import com.dmanime.catalog.BangumiClient
@@ -7,6 +7,11 @@ import com.dmanime.catalog.CalendarDay
 import com.dmanime.catalog.SearchResult
 import com.dmanime.catalog.SubjectCharacter
 import com.dmanime.catalog.SubjectDetail
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -64,6 +69,24 @@ class CatalogRepository(context: Context) {
     fun characters(id: Int): List<SubjectCharacter> {
         val text = fetch("$baseUrl/v0/subjects/$id/characters")
         return runCatching { parser.parseCharacters(text) }.getOrDefault(emptyList())
+    }
+
+    /**
+     * 实际集数 = `GET /v0/episodes` 的条数。
+     *
+     * Bangumi 的 `total_episodes` 是**计划**集数，和实际放送会不一致：
+     * 「约定的梦幻岛 第二季」计划 12 集，因制作原因只播了 11 集
+     * （`total_episodes=12`、`eps=11`、ep 列表 11 条），
+     * 直接拿 12 去显示就会永远写着"更新至 11 集 / 共 12 集"。
+     * 反过来说，还在播的新番 `eps` 常常滞后，那时 ep 列表也只有已播的那几条，
+     * 所以**只在番已经放完**的时候才用它校正（判断在 AppViewModel.fixEpisodeCount）。
+     */
+    fun episodeCountOf(id: Int): Int {
+        val text = fetch("$baseUrl/v0/episodes?subject_id=$id&type=0&limit=100")
+        val root = runCatching { Json.parseToJsonElement(text) }.getOrNull() as? JsonObject ?: return 0
+        val total = root["total"]?.let { element -> runCatching { element.jsonPrimitive.int }.getOrNull() } ?: 0
+        val size = (root["data"] as? JsonArray)?.size ?: 0
+        return if (total > 0) total else size
     }
 
     /**
