@@ -61,7 +61,10 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-enum class Screen { Home, Search, Mine, Downloads, Detail, Chapters, Player, Verify, Health, Season, Index }
+enum class Screen { Home, Search, Mine, Downloads, Detail, Chapters, Player, Verify, Health, Season, Index, DayCalendar }
+
+/** 「更新表」能往前/往后翻几天。日历一次给一周，所以这个范围内都能立刻切。 */
+private const val DAY_MAX_OFFSET = 2
 
 /** 一个源的体检结果。status: ok / empty / error */
 data class SourceHealth(
@@ -125,6 +128,8 @@ data class SourceHit(
 
 data class UiState(
     val screen: Screen = Screen.Home,
+    /** 「更新表」相对今天的天数：0 今天、-1 昨天、1 明天。 */
+    val dayOffset: Int = 0,
     val rules: List<AnimeRule> = emptyList(),
     val selected: AnimeRule? = null,
     val keyword: String = "",
@@ -625,6 +630,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             seasonTotal = 0,
         )
         loadSeason(reset = true)
+    }
+
+    /** 打开「更新表」：和季度表一个路子，进去之后再按天翻。 */
+    fun openDayCalendar() {
+        state = state.copy(
+            screen = Screen.DayCalendar,
+            navForward = true,
+            navStack = state.navStack + state.screen,
+            dayOffset = 0,
+        )
+    }
+
+    /** ◀ ▶ 在更新表里翻日期（前天 ~ 后天）。 */
+    fun shiftDay(delta: Int) {
+        state = state.copy(dayOffset = (state.dayOffset + delta).coerceIn(-DAY_MAX_OFFSET, DAY_MAX_OFFSET))
     }
 
     /** ◀ ▶ 切季度。 */
@@ -2764,9 +2784,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 downloadTip = "",
             )
 
-            // 源体检 / 季度番剧 / 分类索引 / 人机验证：统一弹栈回到进来时那一屏。
+            // 源体检 / 季度番剧 / 分类索引 / 更新表 / 人机验证：统一弹栈回到进来时那一屏。
             // 以前这些没有分支，点「返回」什么都不会发生。
-            Screen.Health, Screen.Season, Screen.Index, Screen.Verify -> state.copy(
+            Screen.Health, Screen.Season, Screen.Index, Screen.DayCalendar, Screen.Verify -> state.copy(
                 screen = state.navStack.lastOrNull() ?: Screen.Mine,
                 navStack = state.navStack.dropLast(1),
                 verifyUrl = "",

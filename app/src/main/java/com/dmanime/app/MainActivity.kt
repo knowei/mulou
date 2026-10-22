@@ -96,6 +96,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -422,6 +423,7 @@ fun App(vm: AppViewModel) {
                                 Screen.Health -> "源体检"
                                 Screen.Season -> "季度番剧"
                                 Screen.Index -> "分类索引"
+                                Screen.DayCalendar -> "更新表"
                                 Screen.Downloads -> "下载"
                                 else -> ""
                             },
@@ -552,6 +554,7 @@ fun App(vm: AppViewModel) {
                 Screen.Health -> ReadableWidth { HealthScreen(vm, state) }
                 Screen.Season -> SeasonScreen(vm, state)
                 Screen.Index -> IndexScreen(vm, state)
+                Screen.DayCalendar -> DayCalendarScreen(vm, state)
                 Screen.Downloads -> ReadableWidth { DownloadsScreen(vm, state) }
             }
             }
@@ -608,7 +611,7 @@ private fun HomeScreen(vm: AppViewModel, state: UiState) {
     val days = state.home.days
     // 进来顺手探一次追番状态（30 分钟内探过的不重探，不必每次打站点）
     LaunchedEffect(Unit) { vm.refreshWatchStatus() }
-    val today = days.today(remember { LocalDate.now().dayOfWeek.value })
+    val today = days.today(LocalDate.now().dayOfWeek.value)
     val season = days.flatMap { it.items }
         .distinctBy { it.id }
         .sortedByDescending { it.rating.score }
@@ -695,7 +698,33 @@ private fun HomeScreen(vm: AppViewModel, state: UiState) {
             }
         }
 
-        item { SectionHeader("今日更新", today?.weekday?.cn.orEmpty()) }
+        item {
+            // 和「本季新番 / 季度表 ›」一个路子：首页只放今天，翻日期进单独的页面
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { vm.openDayCalendar() }
+                    .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Text("今日更新", style = MaterialTheme.typography.titleMedium)
+                val cen = today?.weekday?.cn.orEmpty()
+                if (cen.isNotEmpty()) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        cen,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "更新表 ›",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
         item {
             val items = today?.items.orEmpty()
             if (items.isEmpty()) {
@@ -772,6 +801,26 @@ private fun SectionHeader(title: String, subtitle: String) {
             )
         }
     }
+}
+
+/** 首页「更新」区块能来回翻几天：前天到后天（一周七天的日历本来就都在手里）。 */
+private const val DAY_MIN = -2
+private const val DAY_MAX = 2
+
+private fun dayTitle(offset: Int): String = when (offset) {
+    -2 -> "前天更新"
+    -1 -> "昨日更新"
+    1 -> "明日更新"
+    2 -> "后天更新"
+    else -> "今日更新"
+}
+
+private fun dayEmptyText(offset: Int): String = when (offset) {
+    -2 -> "前天没有更新"
+    -1 -> "昨天没有更新"
+    1 -> "明天没有更新"
+    2 -> "后天没有更新"
+    else -> "今天没有更新"
 }
 
 @Composable
@@ -1983,6 +2032,84 @@ private fun IndexChip(label: String, selected: Boolean, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
         )
+    }
+}
+
+// ------------------------------------------------------------------ 更新表
+
+/**
+ * 更新表：一屏看完某一天的更新，按 ◀ ▶ 换日期。
+ *
+ * 数据是首页已经取回来的七日日历，换日期只是换 weekday 取同一份数据，
+ * 所以这里没有加载态，也不该有等待感。
+ */
+@Composable
+private fun DayCalendarScreen(vm: AppViewModel, state: UiState) {
+    val days = state.home.days
+    val offset = state.dayOffset
+    val weekdayId = (((LocalDate.now().dayOfWeek.value + offset - 1) % 7) + 7) % 7 + 1
+    val day = days.today(weekdayId)
+    val items = day?.items.orEmpty()
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "◀",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (offset > DAY_MIN) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = offset > DAY_MIN) { vm.shiftDay(-1) }
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    dayTitle(offset),
+                    style = MaterialTheme.typography.titleMedium,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    day?.weekday?.cn.orEmpty(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                "▶",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (offset < DAY_MAX) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = offset < DAY_MAX) { vm.shiftDay(1) }
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+        }
+
+        if (items.isEmpty()) {
+            Text(
+                dayEmptyText(offset),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            )
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(gridColumns()),
+                contentPadding = PaddingValues(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                gridItems(items, key = { it.id }) { subject ->
+                    SubjectCard(subject, state.imageBase) { vm.openSubject(subject) }
+                }
+            }
+        }
     }
 }
 
