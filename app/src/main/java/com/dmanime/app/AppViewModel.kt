@@ -218,6 +218,8 @@ data class UiState(
     val commentsHasMore: Boolean = false,
     /** 主题：light / dark / system */
     val themeMode: String = "light",
+    /** 配色：blue（蓝白）/ green（护眼） */
+    val palette: String = "blue",
     /** 导航方向：true=前进（新页面从右滑入），false=返回（从左滑入） */
     val navForward: Boolean = true,
     /**
@@ -337,6 +339,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             indexBaseUrl = catalog.baseUrl,
             imageBase = catalog.imageBase,
             themeMode = uiPrefs.getString("theme", "light") ?: "light",
+            palette = uiPrefs.getString("theme_palette", "blue") ?: "blue",
             danmakuOn = uiPrefs.getBoolean("danmaku_on", true),
             danmakuAlpha = uiPrefs.getFloat("danmaku_alpha", 0.92f),
             danmakuScale = uiPrefs.getFloat("danmaku_scale", 1f),
@@ -646,6 +649,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (mode != "light" && mode != "dark" && mode != "system") return
         uiPrefs.edit().putString("theme", mode).apply()
         state = state.copy(themeMode = mode)
+    }
+    /** 配色切换：blue（蓝白）/ green（护眼）。 */
+    fun setPalette(palette: String) {
+        if (palette != "blue" && palette != "green") return
+        uiPrefs.edit().putString("theme_palette", palette).apply()
+        state = state.copy(palette = palette)
     }
     fun openHealth() {
         state = state.copy(

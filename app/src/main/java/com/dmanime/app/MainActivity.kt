@@ -129,14 +129,12 @@ import kotlinx.coroutines.delay
 import java.io.File
 import java.time.LocalDate
 
-// ------------------------------------------------------------------ 主题（蓝白）
+// ------------------------------------------------------------------ 主题（蓝白 / 护眼）
 
 /**
- * 蓝白配色：主色是清亮的蓝，底色是近白，强调色跟主色同族（不再用第三种杂色）。
- *
- * 原来的青绿 + 暖金被换掉——金色在底部导航的选中态上格外扎眼，和蓝白正文不搭。
+ * 蓝白配色：主色是清亮的蓝，底色是近白，强调色跟主色同族。
  */
-private val KomoLightColors = lightColorScheme(
+private val BlueLightColors = lightColorScheme(
     primary = Color(0xFF2563EB),
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFE5EDFF),
@@ -151,11 +149,21 @@ private val KomoLightColors = lightColorScheme(
     onSurface = Color(0xFF101828),
     surfaceVariant = Color(0xFFEDF2FB),
     onSurfaceVariant = Color(0xFF4A5875),
+    surfaceTint = Color(0xFF2563EB),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF6F9FE),
+    surfaceContainer = Color(0xFFF0F4FC),
+    surfaceContainerHigh = Color(0xFFE9EFFA),
+    surfaceContainerHighest = Color(0xFFE3EAF7),
+    inverseSurface = Color(0xFF2E3138),
+    inverseOnSurface = Color(0xFFEFF1F6),
+    inversePrimary = Color(0xFF9DBEFF),
     outline = Color(0xFFAFC0DA),
+    outlineVariant = Color(0xFFC7D3E6),
     error = Color(0xFFB3261E),
 )
 
-private val KomoDarkColors = darkColorScheme(
+private val BlueDarkColors = darkColorScheme(
     primary = Color(0xFF9DBEFF),
     onPrimary = Color(0xFF0A2350),
     primaryContainer = Color(0xFF1D3A6B),
@@ -170,7 +178,83 @@ private val KomoDarkColors = darkColorScheme(
     onSurface = Color(0xFFE3EAF6),
     surfaceVariant = Color(0xFF1E2A3E),
     onSurfaceVariant = Color(0xFFB4C2D8),
+    surfaceTint = Color(0xFF9DBEFF),
+    surfaceContainerLowest = Color(0xFF070C15),
+    surfaceContainerLow = Color(0xFF0F1724),
+    surfaceContainer = Color(0xFF131C2C),
+    surfaceContainerHigh = Color(0xFF182235),
+    surfaceContainerHighest = Color(0xFF1D283C),
+    inverseSurface = Color(0xFFE3EAF6),
+    inverseOnSurface = Color(0xFF2E3138),
+    inversePrimary = Color(0xFF2563EB),
     outline = Color(0xFF5A6E8C),
+    outlineVariant = Color(0xFF3A4A63),
+    error = Color(0xFFF2B8B5),
+)
+
+/**
+ * 护眼配色：灰绿打底、底色偏米，蓝光和对比都压低一档。
+ *
+ * 主色沿用早期那套青绿，强调色换成同族的绿——原来这里的暖金落到底部导航的
+ * 选中胶囊上太跳，跟低饱和的绿放在一起也吵。
+ */
+private val GreenLightColors = lightColorScheme(
+    primary = Color(0xFF5C7A68),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFDCE8DE),
+    onPrimaryContainer = Color(0xFF17251D),
+    secondary = Color(0xFF4B7358),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFD2E5D8),
+    onSecondaryContainer = Color(0xFF13291B),
+    background = Color(0xFFF7F9F3),
+    onBackground = Color(0xFF1A1D19),
+    surface = Color(0xFFFCFDF8),
+    onSurface = Color(0xFF1A1D19),
+    surfaceVariant = Color(0xFFE2EAE1),
+    onSurfaceVariant = Color(0xFF44514A),
+    surfaceTint = Color(0xFF5C7A68),
+    // 下面这几档是 Material 3 卡片/浮层的默认底色，不写就会落回基线紫灰，
+    // 在米绿底上一眼就是"紫卡片"，整套护眼色就废了
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF2F6EF),
+    surfaceContainer = Color(0xFFECF1EA),
+    surfaceContainerHigh = Color(0xFFE6ECE5),
+    surfaceContainerHighest = Color(0xFFE0E7DF),
+    inverseSurface = Color(0xFF2E332F),
+    inverseOnSurface = Color(0xFFEFF1EC),
+    inversePrimary = Color(0xFFA6C4B0),
+    outline = Color(0xFF9CAFA1),
+    outlineVariant = Color(0xFFC8D4C9),
+    error = Color(0xFFB3261E),
+)
+
+private val GreenDarkColors = darkColorScheme(
+    primary = Color(0xFFA6C4B0),
+    onPrimary = Color(0xFF10281A),
+    primaryContainer = Color(0xFF2A3D33),
+    onPrimaryContainer = Color(0xFFD6E7DC),
+    secondary = Color(0xFF8FB79C),
+    onSecondary = Color(0xFF10281A),
+    secondaryContainer = Color(0xFF2C4536),
+    onSecondaryContainer = Color(0xFFD6E7DC),
+    background = Color(0xFF0F1613),
+    onBackground = Color(0xFFE3E9E4),
+    surface = Color(0xFF141D18),
+    onSurface = Color(0xFFE3E9E4),
+    surfaceVariant = Color(0xFF26332C),
+    onSurfaceVariant = Color(0xFFB6C2BA),
+    surfaceTint = Color(0xFFA6C4B0),
+    surfaceContainerLowest = Color(0xFF0A0F0C),
+    surfaceContainerLow = Color(0xFF131B17),
+    surfaceContainer = Color(0xFF17211C),
+    surfaceContainerHigh = Color(0xFF1C2723),
+    surfaceContainerHighest = Color(0xFF212D28),
+    inverseSurface = Color(0xFFE3E9E4),
+    inverseOnSurface = Color(0xFF2E332F),
+    inversePrimary = Color(0xFF5C7A68),
+    outline = Color(0xFF5C6B62),
+    outlineVariant = Color(0xFF3E4C44),
     error = Color(0xFFF2B8B5),
 )
 
@@ -204,7 +288,10 @@ class MainActivity : ComponentActivity() {
                 controller.isAppearanceLightNavigationBars = !darkTheme
             }
             MaterialTheme(
-                colorScheme = if (darkTheme) KomoDarkColors else KomoLightColors,
+                colorScheme = when (vm.state.palette) {
+                    "green" -> if (darkTheme) GreenDarkColors else GreenLightColors
+                    else -> if (darkTheme) BlueDarkColors else BlueLightColors
+                },
             ) {
                 // 通知点进来：直接播那一集
                 LaunchedEffect(alertId) {
@@ -2293,6 +2380,19 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                             FilterChip(
                                 selected = state.themeMode == mode,
                                 onClick = { vm.setThemeMode(mode) },
+                                label = { Text(label) },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            "blue" to "蓝白",
+                            "green" to "护眼",
+                        ).forEach { (palette, label) ->
+                            FilterChip(
+                                selected = state.palette == palette,
+                                onClick = { vm.setPalette(palette) },
                                 label = { Text(label) },
                             )
                         }
