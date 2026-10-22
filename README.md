@@ -65,9 +65,11 @@ Android 追番客户端。**索引 → 详情 → 播放**，带 B 站弹幕、�
 
 **其他**
 
+- 检查更新：冷启动查一次 GitHub release（6 小时节流），发现新版本弹一次提示（同版本 24 小时最多一次，
+  可以「跳过此版本」），更新说明就是 release 正文；「我的 → 关于」里也能手动查
 - 源体检：批量测所有规则的可用性（浅检只搜索、深检连带取线路），可导出报告
-- 主题：浅色 / 暗色 / 跟随系统
-- 规则从文件、剪贴板、规则索引仓库三条路导入，支持 Kazumi 格式与 CSS1 规则包
+- 主题：浅色 / 暗色 / 跟随系统；配色蓝白 / 护眼绿两套
+- 规则从文件、剪贴板、规则索引仓库三条路导入，支持 Kazumi 格式与 CSS1 规则包；长按可删
 
 ## 模块
 
@@ -77,6 +79,7 @@ core/rules/         纯 JVM 规则引擎：schema、受限 JSONPath、XPath、�
 core/sniff/         纯 JVM 嗅探逻辑：候选分类/去噪/排序、m3u8 解析、JS 注入脚本
 core/catalog/       纯 JVM 番剧索引：Bangumi 客户端与模型
 core/danmaku/       纯 JVM 弹幕源：wbi 签名、protobuf 解析、剧集匹配
+core/update/        纯 JVM 版本比对：GitHub release 解析、版本号排序、更新说明清洗
 tools/rule-cli/     规则自检 / 搜索 / 健康巡检命令行
 tools/mock-site/    本地 mock 站，用于端到端回归（不碰真实站点）
 docs/               调研、方案与设计说明
@@ -118,7 +121,18 @@ docs/               调研、方案与设计说明
 | `KOMO_KEY_PASSWORD` | key 口令 |
 | `KOMO_DANDANPLAY_APP_ID` / `KOMO_DANDANPLAY_APP_SECRET` | 可选，弹弹play 弹幕源凭证 |
 
-打 tag（`git tag v1.0 && git push --tags`）时，会把构建好的 APK 直接挂到 GitHub Release 上。
+打 tag（`git tag v1.0 && git push --tags`）时，会把构建好的 APK 直接挂到 GitHub Release 上，
+release 正文由 CI 用 `git log <上一个 tag>..<本 tag>` 生成——App 的「发现新版本」对话框显示的就是这段。
+
+发一版的流程：
+
+```bash
+# 1. app/build.gradle.kts 里 versionCode +1、versionName 改成新版本号
+# 2. 提交后打个同名 tag，CI 出包 + 建 release
+git tag v1.1 && git push origin v1.1
+```
+
+已装旧版的用户在下次冷启动（或「我的 → 关于 → 检查更新」）时会看到升级提示。
 
 
 ## 使用

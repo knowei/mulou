@@ -79,9 +79,29 @@ jobs:
           path: out/*.apk
           if-no-files-found: error
 
+      # App 的「检查更新」对话框直接显示 release 正文，所以说明得是人话。
+      # GitHub 自动生成的那份基本只有 PR 标题，这里是本仓库实际的提交记录。
+      - name: 生成更新说明
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          if [ -n "$prev" ]; then
+            echo "对比 $prev 的改动：" > release.md
+            echo >> release.md
+            git log --no-merges --pretty=format:'- %s' "$prev..$GITHUB_REF_NAME" >> release.md
+          else
+            echo "首个正式发布。" > release.md
+            echo >> release.md
+            git log --no-merges --pretty=format:'- %s' >> release.md
+          fi
+          echo >> release.md
+          echo >> release.md
+          echo "安装包：komo-${GITHUB_REF_NAME#v}.apk（覆盖安装即可，追番和下载记录都在）" >> release.md
+          cat release.md
+
       - name: 挂到 Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: out/*.apk
-          generate_release_notes: true
+          body_path: release.md

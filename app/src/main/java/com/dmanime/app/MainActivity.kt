@@ -275,6 +275,9 @@ class MainActivity : ComponentActivity() {
         val debugVerifyKeyword = if (debugEnabled) intent?.getStringExtra("verify_keyword") else null
         val debugRulesFile = if (debugEnabled) intent?.getStringExtra("rules_json_file") else null
         val alertId = intent?.getLongExtra("alert_id", 0L) ?: 0L
+        // 调试入口：换成别的仓库来验证「检查更新」的解析与提示（正式包不认）
+        val debugUpdateRepo = if (debugEnabled) intent?.getStringExtra("update_repo") else null
+        if (!debugUpdateRepo.isNullOrBlank()) UpdateChecker.repoOverride = debugUpdateRepo
         setContent {
             val vm: AppViewModel = viewModel()
             val darkTheme = when (vm.state.themeMode) {
@@ -313,6 +316,10 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
+                }
+                // 冷启动顺手查一次有没有新版：内部有 6 小时间隔，不会每次都打 GitHub
+                LaunchedEffect(Unit) {
+                    vm.checkUpdate(manual = !debugUpdateRepo.isNullOrBlank())
                 }
                 LaunchedEffect(debugUrl) {
                     if (!debugUrl.isNullOrBlank()) vm.playDebugUrl(debugUrl)
@@ -483,9 +490,50 @@ fun App(vm: AppViewModel) {
             }
         }
     }
+    UpdatePromptDialog(vm, state)
 }
 
-// ------------------------------------------------------------------ 首页
+/**
+ * 启动时的「发现新版本」提示。
+ *
+ * 只在 [UiState.updatePrompt] 为 true 时出现——ViewModel 那边保证同一个版本
+ * 24 小时内最多问一次，用户点「跳过这个版本」后就不再出现。
+ */
+@Composable
+private fun UpdatePromptDialog(vm: AppViewModel, state: UiState) {
+    val release = state.update
+    if (!state.updatePrompt || release == null) return
+    AlertDialog(
+        onDismissRequest = { vm.dismissUpdate() },
+        title = { Text("发现新版本 ${release.version}") },
+        text = {
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                Text(
+                    "当前版本 ${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (release.notes.isBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("这一版没有写更新说明，点「去更新」看发布页。")
+                } else {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        com.dmanime.update.UpdateNotes.plain(release.notes),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { vm.openUpdate() }) { Text("去更新") } },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { vm.dismissUpdate(skipVersion = true) }) { Text("跳过此版本") }
+                TextButton(onClick = { vm.dismissUpdate() }) { Text("以后再说") }
+            }
+        },
+    )
+}
 
 @Composable
 private fun HomeScreen(vm: AppViewModel, state: UiState) {
@@ -2494,6 +2542,33 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(
+                            onClick = { vm.checkUpdate(manual = true) },
+                            enabled = !state.updateChecking,
+                        ) { Text(if (state.updateChecking) "检查中…" else "检查更新") }
+                        val hint = when {
+                            state.updateError.isNotEmpty() -> "检查失败：${state.updateError}"
+                            state.update != null -> "有新版本 ${state.update?.version}"
+                            state.updateCheckedAt > 0 -> "已是最新"
+                            else -> ""
+                        }
+                        if (hint.isNotEmpty()) {
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                hint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (state.updateError.isNotEmpty()) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
             }
         }

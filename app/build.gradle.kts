@@ -38,8 +38,8 @@ android {
         applicationId = "com.dmanime.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         // 弹弹play 开放平台凭证也不进仓库，本机 local.properties 里写：
         //   komo.dandanplay.appId=...
@@ -109,6 +109,7 @@ dependencies {
     implementation(project(":core:sniff"))
     implementation(project(":core:catalog"))
     implementation(project(":core:danmaku"))
+    implementation(project(":core:update"))
 
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

@@ -1,6 +1,8 @@
 package com.dmanime.app
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +41,7 @@ import com.dmanime.sniff.MediaKind
 import com.dmanime.sniff.MediaUrls
 import com.dmanime.sniff.SniffCandidate
 import com.dmanime.sniff.SniffResolver
+import com.dmanime.update.UpdateRelease
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
@@ -244,6 +247,16 @@ data class UiState(
     val downloadSubjects: Map<Int, SubjectMeta> = emptyMap(),
     /** 下载页顶部的一次性提示，如"这一集还没解析出地址"。 */
     val downloadTip: String = "",
+    // ---------- 检查更新 ----------
+    /** 比当前版本新的那一版；null 表示已是最新或还没查过。 */
+    val update: UpdateRelease? = null,
+    val updateChecking: Boolean = false,
+    /** 检查失败原因（断网、限流），只在「我的」页里显示，不打扰看番。 */
+    val updateError: String = "",
+    /** 启动时要不要弹每日提示。 */
+    val updatePrompt: Boolean = false,
+    /** 上次检查的时间戳，用来区分「没查过」和「查过且最新」。 */
+    val updateCheckedAt: Long = 0,
 )
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -264,6 +277,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 一次最多探几部，避免一口气把站点打成筛子。 */
         const val MAX_WATCH_PROBES = 4
+
+        /** 自动检查更新的最小间隔：一天查几次 GitHub 就够，别每次冷启动都打 API。 */
+        const val AUTO_UPDATE_CHECK_MS = 6 * 60 * 60 * 1000L
+
+        /** 同一个版本最多每 24 小时弹一次提示——用户点了「以后再说」就别一直烦他。 */
+        const val UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000L
     }
 
     var state by mutableStateOf(UiState())
@@ -2546,6 +2565,74 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 maybeLoadDanmaku()
             }
         }
+    }
+
+    /**
+     * 检查更新。
+     *
+     * @param manual 用户在「我的」里点的：不节流、失败也报错；自动检查失败就安静算了。
+     */
+    fun checkUpdate(manual: Boolean = false) {
+        if (state.updateChecking) return
+        val now = System.currentTimeMillis()
+        if (!manual) {
+            val last = uiPrefs.getLong("update_auto_at", 0L)
+            if (now - last < AUTO_UPDATE_CHECK_MS) return            uiPrefs.edit().putLong("update_auto_at", now).apply()
+        }
+        state = state.copy(updateChecking = true, updateError = "")
+        viewModelScope.launch {
+            val attempt = withContext(Dispatchers.IO) {
+                runCatching { UpdateChecker.latest(BuildConfig.VERSION_NAME) }
+            }
+            state = state.copy(updateChecking = false, updateCheckedAt = now)
+            attempt.onSuccess { release ->
+                if (release == null) {
+                    state = state.copy(update = null)
+                    if (manual) appendLog("检查更新：已是最新（${BuildConfig.VERSION_NAME}）")
+                    return@onSuccess
+                }
+                val skipped = uiPrefs.getString("update_skip", "").orEmpty()
+                val askedAt = uiPrefs.getLong("update_asked_at", 0L)
+                // 手动点的就立刻弹（含被「跳过此版本」过的，用户自己又要看了）；
+                // 自动检查才受 24 小时一次的限制。
+                val due = manual || (release.version != skipped && now - askedAt >= UPDATE_PROMPT_INTERVAL_MS)
+                state = state.copy(update = release, updatePrompt = due)
+                appendLog("检查更新：发现 ${release.version}（当前 ${BuildConfig.VERSION_NAME}）")
+            }.onFailure {
+                val msg = it.message ?: it.javaClass.simpleName
+                state = state.copy(updateError = msg)
+                if (manual) appendLog("检查更新失败：$msg")
+            }
+        }
+    }
+
+    /**
+     * 关掉更新提示。
+     *
+     * @param skipVersion true = 这个版本以后都不再提（存进 prefs）；false = 明天再提醒
+     */
+    fun dismissUpdate(skipVersion: Boolean = false) {
+        state.update?.let { release ->
+            if (skipVersion) uiPrefs.edit().putString("update_skip", release.version).apply()
+        }
+        uiPrefs.edit().putLong("update_asked_at", System.currentTimeMillis()).apply()
+        state = state.copy(updatePrompt = false)
+    }
+
+    /** 打开发布页；release 挂了 APK 附件就直接下 APK。 */
+    fun openUpdate() {
+        val release = state.update
+        val url = when {
+            !release?.apkUrl.isNullOrBlank() -> release?.apkUrl!!
+            !release?.pageUrl.isNullOrBlank() -> release?.pageUrl!!
+            else -> UpdateChecker.releasesPage()
+        }
+        runCatching {
+            getApplication<Application>().startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { appendLog("打不开更新页面：${it.message}") }
+        state = state.copy(updatePrompt = false)
     }
 
     fun appendLog(message: String) {
