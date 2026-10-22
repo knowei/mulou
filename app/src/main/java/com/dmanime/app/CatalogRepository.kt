@@ -104,6 +104,40 @@ class CatalogRepository(context: Context) {
         return response.data.map { it.toSubject() } to response.total
     }
 
+    /**
+     * 分类索引：按「地区 + 题材标签」筛整库，返回 (列表, 总数)。
+     *
+     * 服务端限制都是实测出来的，改动前先看一遍：
+     * - `limit` 最大 20（给 50 也只回 20）；
+     * - `offset` ≥ 1000 直接返回空数组，所以一个筛选条件最多只能看到 1000 条；
+     * - `total` 也是封顶值（日本 1000、中国 1000、韩国 465 是真的），
+     *   等于 1000 时说明是"至少 1000"，界面上不能写成准确总数；
+     * - 多个 `tag` 之间是 **AND**，没有 OR，所以「日漫或韩漫」只能查两次拼起来。
+     */
+    fun filterSubjects(
+        region: String,
+        tags: List<String>,
+        sort: String,
+        offset: Int,
+        limit: Int = 20,
+    ): Pair<List<CatalogSubject>, Int> {
+        val allTags = buildList {
+            if (region.isNotBlank()) add(region)
+            addAll(tags.filter { it.isNotBlank() })
+        }
+        val tagJson = allTags.joinToString(",") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
+        val filter = if (tagJson.isEmpty()) """{"type":[2]}""" else """{"type":[2],"tag":[$tagJson]}"""
+        val sortField = if (sort.isBlank()) "" else ""","sort":""" + "\"$sort\""
+        val body = """{"keyword":"","filter":$filter$sortField}"""
+        val pageSize = limit.coerceIn(1, 20)
+        val pageOffset = offset.coerceIn(0, MAX_INDEX_OFFSET)
+        val text = post("$baseUrl/v0/search/subjects?limit=$pageSize&offset=$pageOffset", body)
+        val response = runCatching { parser.parseSearch(text) }.getOrElse {
+            throw IllegalStateException("索引接口返回异常：${text.take(80)}")
+        }
+        return response.data.map { it.toSubject() } to response.total
+    }
+
     /** 在线索引搜索：POST /v0/search/subjects（反代需要支持 POST，已实测可用）。 */
     fun searchSubjects(keyword: String): List<SearchResult> {
         val escaped = keyword.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -191,5 +225,8 @@ class CatalogRepository(context: Context) {
     private companion object {
         const val KEY_BASE = "base_url"
         const val KEY_IMAGE = "image_base"
+
+        /** offset ≥ 1000 服务端返回空，翻到 980 就到头了。 */
+        const val MAX_INDEX_OFFSET = 980
     }
 }

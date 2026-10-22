@@ -61,7 +61,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-enum class Screen { Home, Search, Mine, Downloads, Detail, Chapters, Player, Verify, Health, Season }
+enum class Screen { Home, Search, Mine, Downloads, Detail, Chapters, Player, Verify, Health, Season, Index }
 
 /** 一个源的体检结果。status: ok / empty / error */
 data class SourceHealth(
@@ -236,6 +236,17 @@ data class UiState(
     val seasonTotal: Int = 0,
     val seasonLoading: Boolean = false,
     val seasonError: String? = null,
+    // ---------- 分类索引 ----------
+    /** 地区标签：空串=全部，否则是 Bangumi 的地区 tag（日本/中国/韩国/美国）。 */
+    val indexRegion: String = "",
+    /** 题材标签，多选，服务端按 AND 处理。 */
+    val indexTags: Set<String> = emptySet(),
+    /** heat / score / rank（Bangumi 只认这几个 + match）。 */
+    val indexSort: String = "heat",
+    val indexItems: List<CatalogSubject> = emptyList(),
+    val indexTotal: Int = 0,
+    val indexLoading: Boolean = false,
+    val indexError: String? = null,
     val health: List<SourceHealth> = emptyList(),
     val healthBusy: Boolean = false,
     val healthKeyword: String = "",
@@ -283,6 +294,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 同一个版本最多每 24 小时弹一次提示——用户点了「以后再说」就别一直烦他。 */
         const val UPDATE_PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000L
+
+        /** Bangumi 搜索的 offset ≥ 1000 返回空，分类索引翻到这里就到底了。 */
+        const val INDEX_OFFSET_LIMIT = 980
     }
 
     var state by mutableStateOf(UiState())
@@ -313,6 +327,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 评论区当前挂在哪一集上，以及下一页游标——换集必须从头开始。 */
     private var commentsKey = ""
     private var commentsNext = 0L
+
+    /** 分类索引的请求序号：连点标签时作废过期响应。 */
+    private var indexSeq = 0
 
     /** 自动播放管线：armed 表示当前这次播放允许自动找源/换源。 */
     private var autoPlayArmed = false
@@ -663,6 +680,87 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+    // ------------------------------------------------------------------ 分类索引
+
+    fun openIndex() {
+        state = state.copy(
+            screen = Screen.Index,
+            navForward = true,
+            navStack = state.navStack + state.screen,
+            indexItems = emptyList(),
+            indexTotal = 0,
+            indexError = null,
+        )
+        loadIndex(reset = true)
+    }
+
+    fun setIndexRegion(region: String) {
+        if (region == state.indexRegion) return
+        state = state.copy(indexRegion = region, indexItems = emptyList(), indexTotal = 0, indexError = null)
+        loadIndex(reset = true)
+    }
+
+    fun toggleIndexTag(tag: String) {
+        val tags = if (tag in state.indexTags) state.indexTags - tag else state.indexTags + tag
+        state = state.copy(indexTags = tags, indexItems = emptyList(), indexTotal = 0, indexError = null)
+        loadIndex(reset = true)
+    }
+
+    fun setIndexSort(sort: String) {
+        if (sort == state.indexSort) return
+        state = state.copy(indexSort = sort, indexItems = emptyList(), indexTotal = 0, indexError = null)
+        loadIndex(reset = true)
+    }
+
+    /**
+     * 拉分类索引；reset=false 时按已加载条数翻页。
+     *
+     * 连点标签会连发请求，用 [indexSeq] 作废过期响应——否则先发的慢响应会把
+     * 后发的结果覆盖掉，表现为"点了日漫却出来韩漫"。
+     */
+    fun loadIndex(reset: Boolean = false) {
+        val offset = if (reset) 0 else state.indexItems.size
+        if (!reset) {
+            if (state.indexLoading) return
+            if (state.indexTotal > 0 && offset >= state.indexTotal) return
+        }
+        if (offset >= INDEX_OFFSET_LIMIT) return
+
+        val region = state.indexRegion
+        val tags = state.indexTags.toList()
+        val sort = state.indexSort
+        val seq = ++indexSeq
+        state = state.copy(indexLoading = true, indexError = null)
+
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { catalog.filterSubjects(region, tags, sort, offset) }
+            }
+            if (seq != indexSeq) return@launch
+            state = state.copy(indexLoading = false)
+            result.onSuccess { (list, total) ->
+                val known = state.indexItems.mapTo(mutableSetOf()) { it.id }
+                val merged = state.indexItems + list.filter { known.add(it.id) }
+                state = state.copy(indexItems = merged, indexTotal = total)
+                appendLog("索引 ${indexLabel()}：${merged.size}/${total} 部")
+            }.onFailure {
+                state = state.copy(indexError = describe(it))
+            }
+        }
+    }
+
+    /** 日志里用的中文标签：地区 + 题材。 */
+    private fun indexLabel(): String {
+        val region = when (state.indexRegion) {
+            "日本" -> "日漫"
+            "中国" -> "国漫"
+            "韩国" -> "韩漫"
+            "美国" -> "美漫"
+            else -> "全部"
+        }
+        return if (state.indexTags.isEmpty()) region else "$region·${state.indexTags.joinToString("/")}"
+    }
+
     /** 主题切换：light / dark / system。 */
     fun setThemeMode(mode: String) {
         if (mode != "light" && mode != "dark" && mode != "system") return
@@ -2666,9 +2764,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 downloadTip = "",
             )
 
-            // 源体检 / 季度番剧 / 人机验证：统一弹栈回到进来时那一屏。
-            // 以前这三个没有分支，点「返回」什么都不会发生。
-            Screen.Health, Screen.Season, Screen.Verify -> state.copy(
+            // 源体检 / 季度番剧 / 分类索引 / 人机验证：统一弹栈回到进来时那一屏。
+            // 以前这些没有分支，点「返回」什么都不会发生。
+            Screen.Health, Screen.Season, Screen.Index, Screen.Verify -> state.copy(
                 screen = state.navStack.lastOrNull() ?: Screen.Mine,
                 navStack = state.navStack.dropLast(1),
                 verifyUrl = "",

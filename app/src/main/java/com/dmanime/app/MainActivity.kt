@@ -15,6 +15,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -381,6 +383,7 @@ fun App(vm: AppViewModel) {
                                 Screen.Verify -> "人机验证 · ${state.verifyRuleName}"
                                 Screen.Health -> "源体检"
                                 Screen.Season -> "季度番剧"
+                                Screen.Index -> "分类索引"
                                 Screen.Downloads -> "下载"
                                 else -> ""
                             },
@@ -485,6 +488,7 @@ fun App(vm: AppViewModel) {
                 Screen.Verify -> VerifyScreen(vm, state)
                 Screen.Health -> HealthScreen(vm, state)
                 Screen.Season -> SeasonScreen(vm, state)
+                Screen.Index -> IndexScreen(vm, state)
                 Screen.Downloads -> DownloadsScreen(vm, state)
             }
             }
@@ -1687,6 +1691,201 @@ private fun HealthScreen(vm: AppViewModel, state: UiState) {
     }
 }
 
+// ------------------------------------------------------------------ 分类索引
+
+/**
+ * 地区 → Bangumi 的地区标签。
+ *
+ * 没有「日漫 + 韩漫」这种组合：Bangumi 的 tag 之间是 AND，没有 OR，
+ * 跨地区只能分两次查。美国只筛到 1000 条封顶，所以「美漫」也基本等于「全部里偏美国」。
+ */
+private val INDEX_REGIONS = listOf(
+    "全部" to "",
+    "日漫" to "日本",
+    "国漫" to "中国",
+    "韩漫" to "韩国",
+    "美漫" to "美国",
+)
+
+/** 题材标签，多选（AND）。挑的是 Bangumi 上覆盖量够大的常见标签，数量卡在 11 个以正好两行放下。 */
+private val INDEX_TAGS = listOf(
+    "战斗", "奇幻", "科幻", "恋爱", "日常", "搞笑",
+    "治愈", "悬疑", "运动", "校园", "剧场版",
+)
+
+private val INDEX_SORTS = listOf("heat" to "热度", "score" to "评分", "rank" to "排名")
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun IndexScreen(vm: AppViewModel, state: UiState) {
+    Column(Modifier.fillMaxSize()) {
+        // 用 FlowRow 让所有胶囊都露出来：横滑的话后面几个题材（校园/剧场版）
+        // 就永远藏在屏幕外面，没人会去滑。
+        FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            INDEX_REGIONS.forEach { (label, tag) ->
+                IndexChip(label, state.indexRegion == tag) { vm.setIndexRegion(tag) }
+            }
+        }
+
+        FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            INDEX_TAGS.forEach { tag ->
+                IndexChip(tag, tag in state.indexTags) { vm.toggleIndexTag(tag) }
+            }
+        }
+
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                when {
+                    state.indexTotal <= 0 -> "正在获取…"
+                    // 1000 是服务端的封顶值，不是真实总数，别写成准确数
+                    state.indexTotal >= 1000 -> "已加载 ${state.indexItems.size} 部 · 共 1000+ 部"
+                    else -> "共 ${state.indexTotal} 部 · 已加载 ${state.indexItems.size}"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            INDEX_SORTS.forEach { (key, label) ->
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.indexSort == key) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { vm.setIndexSort(key) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        }
+
+        state.indexError?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
+
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(3),
+            contentPadding = PaddingValues(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.weight(1f),
+        ) {
+            gridItems(state.indexItems, key = { it.id }) { subject ->
+                Column(Modifier.clickable { vm.openSubject(subject) }) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(2f / 3f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        val cover = subject.coverUrlSmall.withImageBase(state.imageBase)
+                        if (cover.isNotEmpty()) {
+                            AsyncImage(
+                                model = cover,
+                                contentDescription = subject.displayTitle,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        subject.displayTitle,
+                        style = MaterialTheme.typography.labelMedium,
+                        minLines = 2,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        buildString {
+                            if (subject.airDate.isNotEmpty()) append(subject.airDate)
+                            if (subject.rating.score > 0) {
+                                if (isNotEmpty()) append(" · ")
+                                append("%.1f".format(subject.rating.score))
+                            }
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            if (state.indexLoading) {
+                item(span = { GridItemSpan(3) }) {
+                    Box(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) }
+                }
+            } else if (state.indexItems.isNotEmpty() && state.indexItems.size < state.indexTotal) {
+                item(span = { GridItemSpan(3) }) {
+                    LaunchedEffect(state.indexItems.size) { vm.loadIndex(reset = false) }
+                    Box(Modifier.fillMaxWidth().height(1.dp))
+                }
+            } else if (state.indexItems.isNotEmpty()) {
+                item(span = { GridItemSpan(3) }) {
+                    Text(
+                        "没有更多了",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 索引页的筛选胶囊：选中实心主色，未选中淡底。做得比 Material Chip 矮一档，省竖向空间。 */
+@Composable
+private fun IndexChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        },
+        contentColor = if (selected) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .clickable { onClick() },
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
+        )
+    }
+}
+
 // ------------------------------------------------------------------ 季度番剧表
 
 private val QUARTER_NAMES = listOf("冬", "春", "夏", "秋")
@@ -2266,6 +2465,11 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                     else -> "离线看已下载的集"
                 },
                 onClick = vm::openDownloads,
+            )
+            MineEntryRow(
+                title = "分类索引",
+                subtitle = "按地区、题材翻整个番剧库",
+                onClick = vm::openIndex,
             )
             MineEntryRow(
                 title = "季度番剧",
