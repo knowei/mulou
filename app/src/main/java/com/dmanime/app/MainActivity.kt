@@ -96,6 +96,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -128,47 +129,48 @@ import kotlinx.coroutines.delay
 import java.io.File
 import java.time.LocalDate
 
-// ------------------------------------------------------------------ 主题（木漏 Komo 配色）
+// ------------------------------------------------------------------ 主题（蓝白）
 
 /**
- * 取自 design/README.md 的调色板：
- * 莫兰迪青绿为主，暖金晨曦做强调，浅色底用晨光米白，深色底用深邃黛绿。
+ * 蓝白配色：主色是清亮的蓝，底色是近白，强调色跟主色同族（不再用第三种杂色）。
+ *
+ * 原来的青绿 + 暖金被换掉——金色在底部导航的选中态上格外扎眼，和蓝白正文不搭。
  */
 private val KomoLightColors = lightColorScheme(
-    primary = Color(0xFF6E8B7A),
+    primary = Color(0xFF2563EB),
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFE0EAE2),
-    onPrimaryContainer = Color(0xFF1E2A24),
-    secondary = Color(0xFFD9A544),
+    primaryContainer = Color(0xFFE5EDFF),
+    onPrimaryContainer = Color(0xFF0B2545),
+    secondary = Color(0xFF3B82F6),
     onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFFCEBC7),
-    onSecondaryContainer = Color(0xFF3A2A00),
-    background = Color(0xFFFFFDF9),
-    onBackground = Color(0xFF1B1C1A),
-    surface = Color(0xFFFFFDF9),
-    onSurface = Color(0xFF1B1C1A),
-    surfaceVariant = Color(0xFFE0EAE2),
-    onSurfaceVariant = Color(0xFF47524B),
-    outline = Color(0xFF9FAFA4),
+    secondaryContainer = Color(0xFFDBE9FE),
+    onSecondaryContainer = Color(0xFF102A56),
+    background = Color(0xFFFCFDFF),
+    onBackground = Color(0xFF101828),
+    surface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF101828),
+    surfaceVariant = Color(0xFFEDF2FB),
+    onSurfaceVariant = Color(0xFF4A5875),
+    outline = Color(0xFFAFC0DA),
     error = Color(0xFFB3261E),
 )
 
 private val KomoDarkColors = darkColorScheme(
-    primary = Color(0xFFA8C4B2),
-    onPrimary = Color(0xFF12301F),
-    primaryContainer = Color(0xFF2A3D33),
-    onPrimaryContainer = Color(0xFFD6E7DC),
-    secondary = Color(0xFFFCD074),
-    onSecondary = Color(0xFF3A2A00),
-    secondaryContainer = Color(0xFF4A3A12),
-    onSecondaryContainer = Color(0xFFFCEBC7),
-    background = Color(0xFF0F1613),
-    onBackground = Color(0xFFE3E9E4),
-    surface = Color(0xFF151E1A),
-    onSurface = Color(0xFFE3E9E4),
-    surfaceVariant = Color(0xFF26332C),
-    onSurfaceVariant = Color(0xFFB6C2BA),
-    outline = Color(0xFF5C6B62),
+    primary = Color(0xFF9DBEFF),
+    onPrimary = Color(0xFF0A2350),
+    primaryContainer = Color(0xFF1D3A6B),
+    onPrimaryContainer = Color(0xFFD8E4FF),
+    secondary = Color(0xFF7FA9F0),
+    onSecondary = Color(0xFF0A2350),
+    secondaryContainer = Color(0xFF243B60),
+    onSecondaryContainer = Color(0xFFD8E4FF),
+    background = Color(0xFF0B1220),
+    onBackground = Color(0xFFE3EAF6),
+    surface = Color(0xFF111A2B),
+    onSurface = Color(0xFFE3EAF6),
+    surfaceVariant = Color(0xFF1E2A3E),
+    onSurfaceVariant = Color(0xFFB4C2D8),
+    outline = Color(0xFF5A6E8C),
     error = Color(0xFFF2B8B5),
 )
 
@@ -2396,20 +2398,26 @@ private fun EpisodeChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // 正在播的那一格用实心主色：浅色底 + 深色字在蓝白主题下太轻，
+    // 尤其单集作品只有一格时，根本看不出在放哪一集
     val container = when {
-        current -> MaterialTheme.colorScheme.primaryContainer
+        current -> MaterialTheme.colorScheme.primary
         available -> MaterialTheme.colorScheme.surfaceVariant
         sourceBehind -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
         else -> MaterialTheme.colorScheme.surface
     }
     val label = when {
-        current -> MaterialTheme.colorScheme.onPrimaryContainer
+        current -> MaterialTheme.colorScheme.onPrimary
         available -> MaterialTheme.colorScheme.onSurface
         sourceBehind -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
         else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
     }
-    val border = MaterialTheme.colorScheme.outlineVariant
-        .copy(alpha = if (current || available) 0.9f else 0.35f)
+    val border = if (current) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outlineVariant
+            .copy(alpha = if (available) 0.9f else 0.35f)
+    }
 
     Surface(
         onClick = onClick,
@@ -2427,6 +2435,7 @@ private fun EpisodeChip(
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (current) FontWeight.SemiBold else null,
                 color = label,
             )
         }
@@ -3275,7 +3284,8 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                             )
                             Spacer(Modifier.weight(1f))
                             Text(
-                                "第 ${state.playEpisodeIndex + 1} 集",
+                                // 单集作品（剧场版、OVA）只有一格，"第 1 集"读起来没信息量
+                                if (episodes == 1) "正在播放" else "第 ${state.playEpisodeIndex + 1} 集",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
                             )

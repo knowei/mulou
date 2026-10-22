@@ -250,7 +250,7 @@ fun PlayerOverlay(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
                                 .background(
-                                    if (danmakuOn) Color(0xFF6E8B7A).copy(alpha = 0.92f)
+                                    if (danmakuOn) MaterialTheme.colorScheme.primary.copy(alpha = 0.92f)
                                     else Color.Black.copy(alpha = 0.45f)
                                 )
                                 .clickable {
@@ -374,7 +374,7 @@ fun PlayerOverlay(
                                         text = {
                                             Text(
                                                 if (option == 1f) "1.0x（正常）" else "${trimSpeed(option)}x",
-                                                color = if (option == speed) Color(0xFFB9A6FF) else Color.White,
+                                                color = if (option == speed) Color(0xFF9DBEFF) else Color.White,
                                                 style = MaterialTheme.typography.bodyMedium,
                                             )
                                         },
