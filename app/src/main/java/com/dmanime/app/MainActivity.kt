@@ -2627,7 +2627,14 @@ private fun SourceBar(state: UiState, rank: (String) -> Int, onClick: () -> Unit
             modifier = Modifier.weight(1f),
         )
         Text(
-            if (state.busy) "源 $groupCount · 搜索中…" else "源 $groupCount${if (failedCount > 0) " · 失败 $failedCount" else ""}",
+            when {
+                state.busy -> "源 $groupCount · 搜索中…"
+                // 从观看记录/下载恢复播放时没有搜索过程，hits 是空的，
+                // 这时候写"源 0"会让人以为一个源都没有，其实点进去还能换。
+                groupCount == 0 -> "换源"
+                failedCount > 0 -> "源 $groupCount · 失败 $failedCount"
+                else -> "源 $groupCount"
+            },
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
         )
