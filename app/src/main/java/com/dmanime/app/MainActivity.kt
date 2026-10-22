@@ -1212,6 +1212,37 @@ private fun SearchScreen(vm: AppViewModel, state: UiState) {    var keyword by r
         if (state.searchMode == SearchMode.Index) {
             if (keyword.isBlank()) {
                 Column {
+                    // 分类索引入口：搜索框下面一条。放在「我的」里谁也找不到，
+                    // 而"不知道看什么"本来就该从搜索页起步。
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 2.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { vm.openIndex() },
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("分类索引", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "按地区、题材翻整个番剧库",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
                     Text(
                         "输入番名，先查本地索引；点结果直接播放。",
                         style = MaterialTheme.typography.bodySmall,
@@ -2465,11 +2496,6 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                     else -> "离线看已下载的集"
                 },
                 onClick = vm::openDownloads,
-            )
-            MineEntryRow(
-                title = "分类索引",
-                subtitle = "按地区、题材翻整个番剧库",
-                onClick = vm::openIndex,
             )
             MineEntryRow(
                 title = "季度番剧",
