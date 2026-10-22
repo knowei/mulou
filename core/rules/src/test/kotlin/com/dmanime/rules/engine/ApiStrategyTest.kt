@@ -141,6 +141,43 @@ class ApiStrategyTest {
     }
 
     @Test
+    fun `delimited chapters accept a separate road name separator`() {
+        val rule = parseRule(
+            """
+            {
+              "name": "maccms-comma-names",
+              "baseURL": "https://site.example/",
+              "chapterMode": "api",
+              "chapterApiConfig": {
+                "request": {"method": "GET", "url": "https://site.example/api/detail"},
+                "format": "delimited",
+                "roadNamesPath": "$.list[0].vod_play_from",
+                "roadEpisodesPath": "$.list[0].vod_play_url",
+                "roadNameSeparator": ","
+              }
+            }
+            """.trimIndent()
+        )
+
+        val body = """
+            {"list":[{"vod_play_from":"繁体,简体",
+            "vod_play_url":"01${'$'}https://cdn.example.com/cht/01.mp4$$$01${'$'}https://cdn.example.com/chs/01.mp4"}]}
+        """.trimIndent()
+
+        val (roads, diagnostics) = strategy.parseChapters(
+            body,
+            rule.chapterApiConfig,
+            source = "25524",
+            baseUrl = rule.baseUrl,
+        )
+
+        assertEquals(listOf("繁体", "简体"), roads.map { it.name })
+        assertEquals(listOf("https://cdn.example.com/cht/01.mp4"), roads[0].urls)
+        assertEquals(listOf("https://cdn.example.com/chs/01.mp4"), roads[1].urls)
+        assertTrue(diagnostics.isEmpty(), diagnostics.toString())
+    }
+
+    @Test
     fun `validator rejects jsonpath features outside the restricted subset`() {
         val broken = searchRule.searchApiConfig.copy(listPath = "$.list[?(@.enabled)]")
         assertThrows(RuleFormatException::class.java) {

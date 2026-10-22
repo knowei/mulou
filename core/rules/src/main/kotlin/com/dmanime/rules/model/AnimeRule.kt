@@ -115,6 +115,13 @@ data class ApiChapterConfig(
     val roadNamesPath: String = "",
     val roadEpisodesPath: String = "",
     val roadSeparator: String = "$$$",
+    /**
+     * 线路名的分隔符。为空时沿用 [roadSeparator]。
+     *
+     * 苹果 CMS 的 `vod_play_from` 基本都是 `$$$`，但部分站点（girigiri）把它写成
+     * 逗号，而 `vod_play_url` 仍用 `$$$`，两者必须分开切。
+     */
+    val roadNameSeparator: String = "",
     val episodeSeparator: String = "#",
     val fieldSeparator: String = "$",
     /** 章节响应上的命名 JSONPath，渲染进 episodePage。 */

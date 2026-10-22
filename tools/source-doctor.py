@@ -139,20 +139,19 @@ def attr_or_text(node, attr: str) -> str:
 
 
 def jp_read(data, path):
-    """只支持 $.a.b[*].c 这种受限路径，够规则用。"""
+    """只支持 $.a.b[*].c / $.a[0].b 这种受限路径，够规则用。"""
     if not path or not path.startswith("$"):
         return []
     tokens = []
     for part in path[1:].split("."):
         if not part:
             continue
-        if part.endswith("[*]"):
-            head = part[: -len("[*]")]
-            if head:  # "$[*]" 这种直接以 [*] 结尾的，不要再插一个空 key
-                tokens.append(head)
-            tokens.append("[*]")
-        else:
-            tokens.append(part)
+        # 把 "list[0]" / "list[*]" 拆成 ["list", "[0]"] / ["list", "[*]"]
+        head, bracket, rest = part.partition("[")
+        if head:
+            tokens.append(head)
+        if bracket:
+            tokens.append("[" + rest.rstrip("]") + "]")
     cur = [data]
     for tok in tokens:
         nxt = []
@@ -162,6 +161,14 @@ def jp_read(data, path):
                     nxt.extend(node)
                 elif isinstance(node, dict):
                     nxt.extend(node.values())
+            elif tok.startswith("["):
+                inner = tok[1:-1]
+                if isinstance(node, list) and inner.isdigit():
+                    idx = int(inner)
+                    if idx < len(node):
+                        nxt.append(node[idx])
+                elif isinstance(node, dict) and inner in node:
+                    nxt.append(node[inner])
             elif isinstance(node, dict) and tok in node:
                 nxt.append(node[tok])
             elif isinstance(node, list) and tok.isdigit():
@@ -392,7 +399,9 @@ def probe_api(rule, keyword, session, headers, res: Result) -> None:
     curl = (creq.get("url") or "").replace("@source", source_value)
     if not curl:
         return
-    cquery = {k: fill(str(v), keyword) for k, v in (creq.get("query") or {}).items()}
+    cquery = {
+        k: fill(str(v), keyword).replace("@source", source_value) for k, v in (creq.get("query") or {}).items()
+    }
     if (creq.get("method") or "GET").upper() == "GET":
         r2 = session.get(curl, params=cquery, headers=headers, timeout=TIMEOUT)
     else:
@@ -414,12 +423,16 @@ def probe_api(rule, keyword, session, headers, res: Result) -> None:
             total = max(total, len(jp_read(road, ch.get("episodesPath") or "")))
         res.episodes = total
     else:
-        roads = jp_read(data2, ch.get("roadNamesPath") or "")
-        eps = jp_read(data2, ch.get("roadEpisodesPath") or "")
-        res.roads = len(roads)
+        names_raw = jp_first(data2, ch.get("roadNamesPath") or "")
+        eps_raw = jp_first(data2, ch.get("roadEpisodesPath") or "")
+        road_sep = ch.get("roadSeparator") or "$$$"
+        name_sep = ch.get("roadNameSeparator") or road_sep
+        ep_sep = ch.get("episodeSeparator") or "#"
+        groups = eps_raw.split(road_sep) if eps_raw else []
+        res.roads = len([n for n in names_raw.split(name_sep) if n.strip()]) if names_raw else len(groups)
         best = 0
-        for item in eps:
-            best = max(best, len(str(item).split(ch.get("episodeSeparator") or "#")))
+        for group in groups:
+            best = max(best, len([e for e in group.split(ep_sep) if e.strip()]))
         res.episodes = best
 
 

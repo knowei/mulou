@@ -239,7 +239,8 @@ class ApiStrategy {
         val episodesValue = stringValue(RestrictedJsonPath.readFirst(document, config.roadEpisodesPath))
         if (episodesValue.isEmpty()) return emptyList()
 
-        val roadNames = namesValue.split(config.roadSeparator)
+        val nameSeparator = config.roadNameSeparator.ifBlank { config.roadSeparator }
+        val roadNames = namesValue.split(nameSeparator)
         val roadGroups = episodesValue.split(config.roadSeparator)
         val roads = ArrayList<Road>()
 
