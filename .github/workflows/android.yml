@@ -1,0 +1,83 @@
+name: Android
+
+# 每次推 main、发 PR、或者手动点一下，都跑一遍测试并出 APK。
+# 打 tag（v1.0 这种）时额外把 APK 挂到 GitHub Release 上。
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # 打 tag 时创建 Release 需要
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # 可选：配了这四个 secret 就出正式签名包，没配就只出 debug 包
+      KEYSTORE_BASE64: ${{ secrets.KOMO_KEYSTORE_BASE64 }}
+      KOMO_STORE_FILE: ${{ secrets.KOMO_KEYSTORE_BASE64 != '' && 'app/release-ci.jks' || '' }}
+      KOMO_STORE_PASSWORD: ${{ secrets.KOMO_STORE_PASSWORD }}
+      KOMO_KEY_ALIAS: ${{ secrets.KOMO_KEY_ALIAS }}
+      KOMO_KEY_PASSWORD: ${{ secrets.KOMO_KEY_PASSWORD }}
+      # 可选：弹弹play 开放平台凭证，没有就留空（该弹幕源不可用，其余功能不受影响）
+      KOMO_DANDANPLAY_APP_ID: ${{ secrets.KOMO_DANDANPLAY_APP_ID }}
+      KOMO_DANDANPLAY_APP_SECRET: ${{ secrets.KOMO_DANDANPLAY_APP_SECRET }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          # 没有 wrapper 校验和文件，别让校验步骤报错
+          validate-wrappers: false
+
+      - name: 还原签名文件
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > app/release-ci.jks
+          ls -l app/release-ci.jks
+
+      - name: 跑单元测试
+        run: ./gradlew test --console=plain
+
+      - name: 构建 APK
+        run: |
+          chmod +x gradlew
+          if [ -f app/release-ci.jks ]; then
+            ./gradlew :app:assembleDebug :app:assembleRelease --console=plain
+          else
+            echo "没有配签名 secret，只出 debug 包"
+            ./gradlew :app:assembleDebug --console=plain
+          fi
+
+      - name: 收集产物
+        run: |
+          mkdir -p out
+          find app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: komo-apk
+          path: out/*.apk
+          if-no-files-found: error
+
+      - name: 挂到 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          generate_release_notes: true

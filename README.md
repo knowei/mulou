@@ -1,5 +1,7 @@
 # 木漏 Komo
 
+[![Android](https://github.com/knowei/mulou/actions/workflows/android.yml/badge.svg)](https://github.com/knowei/mulou/actions/workflows/android.yml)
+
 Android 追番客户端。**索引 → 详情 → 播放**，带 B 站弹幕、离线下载和一条你自己的规则链。
 
 > 应用**不内置任何片源**。内容来源由用户导入规则自行配置，本项目只做索引、播放器与弹幕渲染。
@@ -96,9 +98,28 @@ docs/               调研、方案与设计说明
 ```
 
 签名配置不写死在仓库里：在 `app/build.gradle.kts` 里读取 `local.properties` 或环境变量，
-自备一份 keystore 即可。**正式包与调试包签名不同，切换时必须先卸载**，否则会提示签名冲突。
+自备一份 keystore 即可。debug 包也用同一份 key 签名，所以 `install -r` 可以在两个包之间
+互相覆盖、不会丢数据（换一份别的 key 就得先卸载）。
 
 `./gradlew` 首次运行需要联网下载 Gradle 发行包；网络受限时可以用本机 Gradle 执行同名任务。
+
+### 自动构建
+
+`.github/workflows/android.yml`：推到 `main`、发 PR、或者手动触发都会跑单测并产出 APK，
+产物在 Actions 页面的 `komo-apk` artifact 里。
+
+配了下面这几个 secret 就会额外产出**正式签名包**，否则只出 debug 包：
+
+| Secret | 说明 |
+| --- | --- |
+| `KOMO_KEYSTORE_BASE64` | keystore 的 base64（`base64 -w0 release.jks` 或 PowerShell `[Convert]::ToBase64String([IO.File]::ReadAllBytes('release.jks'))`） |
+| `KOMO_STORE_PASSWORD` | keystore 口令 |
+| `KOMO_KEY_ALIAS` | key 别名 |
+| `KOMO_KEY_PASSWORD` | key 口令 |
+| `KOMO_DANDANPLAY_APP_ID` / `KOMO_DANDANPLAY_APP_SECRET` | 可选，弹弹play 弹幕源凭证 |
+
+打 tag（`git tag v1.0 && git push --tags`）时，会把构建好的 APK 直接挂到 GitHub Release 上。
+
 
 ## 使用
 
