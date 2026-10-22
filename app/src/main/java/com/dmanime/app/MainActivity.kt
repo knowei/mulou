@@ -2708,7 +2708,7 @@ private fun buildSourceGroups(state: UiState, rank: (String) -> Int): List<Sourc
 
 /** 播放页顶部的源入口：一行显示当前源 + 源数量，点击弹面板。 */
 @Composable
-private fun SourceBar(state: UiState, rank: (String) -> Int, onClick: () -> Unit) {
+private fun SourceBar(vm: AppViewModel, state: UiState, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -2717,7 +2717,8 @@ private fun SourceBar(state: UiState, rank: (String) -> Int, onClick: () -> Unit
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val groupCount = buildSourceGroups(state, rank).size
+        val plus = state.playQuery.ifBlank { state.keyword }
+        val groupCount = buildSourceGroups(state) { name -> vm.rankFor(plus, name) }.size
         val failedCount = state.hits.count { it.error != null || it.items.isEmpty() }
         Text(
             if (state.entryRuleName.isEmpty()) "正在找源…" else "▶ ${state.entryRuleName}",
@@ -2746,7 +2747,16 @@ private fun SourceBar(state: UiState, rank: (String) -> Int, onClick: () -> Unit
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SourceSheet(vm: AppViewModel, state: UiState, onDismiss: () -> Unit) {
-    val groups = remember(state.hits, state.sourceStatus) { buildSourceGroups(state, vm::titleRank) }
+    // 打分用的 query 必须取自这一帧的 state，不能用 vm.titleRank 去读 VM 的最新值：
+    // 换番时 hits 和 playQuery 不是同时更新的，错开那一下会把所有源都判成「标题不对」，
+    // 面板就变成「可用源 0」。
+    val plus = state.playQuery.ifBlank { state.keyword }
+    val groups = remember(state.hits, state.sourceStatus, plus) {
+        buildSourceGroups(state) { name -> vm.rankFor(plus, name) }
+    }
+    val matched = remember(state.hits) {
+        state.hits.count { it.error == null && it.items.isNotEmpty() }
+    }
     val failedHits = remember(state.hits) {
         state.hits.filter { it.error != null || it.items.isEmpty() }
     }
@@ -2775,6 +2785,21 @@ private fun SourceSheet(vm: AppViewModel, state: UiState, onDismiss: () -> Unit)
             Spacer(Modifier.height(8.dp))
 
             LazyColumn(Modifier.heightIn(max = 520.dp)) {
+                // 0 个源时别只留一个光秃秃的「可用源 0」，说清是「没搜到」还是「搜到了但对不上」
+                if (groups.isEmpty() && !state.busy) {
+                    item {
+                        Text(
+                            if (matched > 0) {
+                                "有 $matched 个源搜到了结果，但标题跟这部对不上（多半是季数、剧场版的标法不同）"
+                            } else {
+                                "没有源搜到这部番。展开下面的失败源能看到每个站卡在哪一步"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                        )
+                    }
+                }
                 items(groups, key = { it.host }) { group ->
                     val entry = group.entries.first()
                     val key = "${entry.first.name}|${entry.second.src}"
@@ -3332,7 +3357,7 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             }
 
             if (state.entryRuleName.isNotEmpty()) {
-                SourceBar(state, vm::titleRank) { showSources = true }
+                SourceBar(vm, state) { showSources = true }
             }
             if (showSources) {
                 SourceSheet(vm, state) { showSources = false }

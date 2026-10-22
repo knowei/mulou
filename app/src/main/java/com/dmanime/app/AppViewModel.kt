@@ -1475,9 +1475,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 面板原来无条件取每条规则的第一个搜索结果，遇到「站点把同系列另一季排在
      * 前面」的情况会切到错的季。负分代表标题对不上，面板里直接不显示。
+     *
+     * query 由调用方传，不在这里读 state：面板渲染拿的是某一帧的 UiState 快照，
+     * 而 state.playQuery 可能已经被下一次搜索改掉了 —— 两者错开那一下会把 hits 里
+     * 所有候选都判成「标题不对」，面板就变成「可用源 0」。
      */
-    fun titleRank(name: String): Int =
-        titleScore(state.playQuery.ifBlank { state.keyword }, name)
+    fun rankFor(query: String, name: String): Int = titleScore(query, name)
 
     /** 切到指定源的指定线路，保持当前集数。 */
     fun playRoad(rule: AnimeRule, item: SearchItem, roadIndex: Int) {
