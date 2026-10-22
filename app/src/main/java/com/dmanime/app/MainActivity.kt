@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -101,6 +102,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -3679,14 +3681,12 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
         screenCfg.screenHeightDp * 0.62f,
     ).dp
 
-    Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
+    // 画面块和「源栏 / 详情·评论 / 选集」面板拆成两个可复用部分：
+    // 平板左右分栏、手机上下叠放，内容一致只是摆法不同。
+    val videoArea: @Composable (Modifier) -> Unit = { areaModifier ->
             if (exoPlayer != null) {
                 Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(videoHeight)
-                        .background(Color.Black)
+                    areaModifier.background(Color.Black).clipToBounds()
                 ) {
                     AndroidView(
                         factory = { ctx ->
@@ -3734,10 +3734,7 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                 }
             } else {
                 Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    areaModifier.background(MaterialTheme.colorScheme.surfaceVariant).clipToBounds(),
                     contentAlignment = Alignment.Center,
                 ) {
                     val gate = state.episodeGate
@@ -3777,7 +3774,10 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                     }
                 }
             }
+    }
 
+    // 右侧（平板）/ 下方（手机）：源栏 + 详情·评论 + 选集
+    val playerPanels: @Composable ColumnScope.() -> Unit = {
             if (state.entryRuleName.isNotEmpty()) {
                 SourceBar(vm, state) { showSources = true }
             }
@@ -3903,6 +3903,29 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             }
             } else {
                 CommentsPane(vm, state, Modifier.weight(1f))
+            }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        if (tabletLayout) {
+            // 平板：左边画面按 16:9 居中，右边一栏放源/详情/选集——
+            // 横屏时上下叠放只剩一条缝，选集根本点不舒服
+            Row(Modifier.fillMaxSize()) {
+                Box(
+                    Modifier.weight(0.62f).fillMaxHeight().background(Color.Black),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    videoArea(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                }
+                VerticalDivider()
+                Column(Modifier.weight(0.38f).fillMaxHeight()) {
+                    playerPanels()
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                videoArea(Modifier.fillMaxWidth().height(videoHeight))
+                playerPanels()
             }
         }
 

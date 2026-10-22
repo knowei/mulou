@@ -150,7 +150,9 @@ private fun buildPlan(
     speedFactor: Float,
     paint: Paint,
 ): LanePlan {
-    val textSize = min(width / 26f, 60f) * textScale.coerceIn(0.6f, 2f)
+    // 字号按「宽度 1/26」和「高度 1/18」里小的那个走，并封顶 60px：
+    // 平板横屏时画面又宽又高，只按宽度算会大得盖住整片画面
+    val textSize = min(min(width / 26f, height / 18f), 60f) * textScale.coerceIn(0.6f, 2f)
     if (textSize <= 1f) return LanePlan(emptyList(), emptyList(), width, 1f, 0f)
 
     paint.textSize = textSize
