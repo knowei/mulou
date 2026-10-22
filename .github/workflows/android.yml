@@ -44,6 +44,10 @@ jobs:
           # 没有 wrapper 校验和文件，别让校验步骤报错
           validate-wrappers: false
 
+      # 仓库是在 Windows 上提交的，git 里可能没带可执行位，先补一下
+      - name: 准备 wrapper
+        run: chmod +x gradlew
+
       - name: 还原签名文件
         if: env.KEYSTORE_BASE64 != ''
         run: |
