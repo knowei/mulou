@@ -30,15 +30,32 @@
 
 ## 3. 调色板与主题色 (Color Palette)
 
-供 Android Compose Material 3 主题与图标配置参考：
+应用里现在有两套配色，在「我的 → 外观」里切换（`uiPrefs` 的 `theme_palette`）。
+色值都定义在 [MainActivity.kt](../app/src/main/java/com/dmanime/app/MainActivity.kt) 顶部。
+
+### 3.1 护眼（Green，默认保留的青绿系）
 
 | 角色 | 颜色值 (Hex) | 用途 |
 | :--- | :--- | :--- |
-| **Sage Primary (莫兰迪青绿)** | `#7F998A` / `#6E8B7A` | 主题主色、图标背景基底、关键交互高亮 |
-| **Sage Container (浅青灰)** | `#E0EAE2` | 浅色模式卡片底色、柔和衬底 |
-| **Sun Amber (暖金晨曦)** | `#FCD074` / `#F8BE50` | 强调色、发光粒子、进度条与微光核心 |
-| **Soft Cream (晨光米白)** | `#FFFDF9` | 浅色模式背景、文字高亮 |
-| **Deep Forest (深邃黛绿)** | `#151E1A` / `#0F1613` | 深色模式 (Dark Theme) 背景底色 |
+| **Sage Primary (莫兰迪青绿)** | `#5C7A68` | 主题主色、按下去的高亮、正在播的集数格子 |
+| **Sage Container (浅青灰)** | `#DCE8DE` | 浅色模式浅底、柔和衬底 |
+| **Sage Accent (同族绿)** | `#4B7358` | 强调色、底部导航选中胶囊 |
+| **Soft Cream (晨光米白)** | `#F7F9F3` / `#FCFDF8` | 浅色模式背景与卡片 |
+| **Deep Forest (深邃黛绿)** | `#0F1613` / `#151E1A` | 深色模式背景与卡片 |
+
+> 早期的暖金 `#FCD074` 不再用于导航选中态：它落在底部胶囊上过于扎眼，
+> 和低饱和的灰绿也不协调。
+
+### 3.2 蓝白（Blue）
+
+| 角色 | 颜色值 (Hex) | 用途 |
+| :--- | :--- | :--- |
+| **Bright Blue (主蓝)** | `#2563EB` | 主题主色、链接、正在播的集数格子 |
+| **Blue Container** | `#E5EDFF` / `#DBE9FE` | 浅底与导航选中胶囊 |
+| **Paper White** | `#FCFDFF` / `#FFFFFF` | 背景与卡片 |
+
+> 两套都显式写了 `surfaceContainerLowest/Low/Container/High/Highest`：
+> 这几档是 Card / BottomSheet / 菜单的默认底色，不写会落回 Material 3 基线的紫灰。
 
 ---
 
