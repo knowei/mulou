@@ -28,7 +28,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -73,6 +75,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -100,10 +105,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -363,11 +370,40 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** 宽度到这个 dp 就当平板/横屏看待（普通手机竖屏都在 400 上下）。 */
+private const val WIDE_WIDTH_DP = 700
+
+/** 详情页在宽屏上最多铺这么宽，再宽眼睛要来回扫。 */
+private val DETAIL_MAX_WIDTH = 900.dp
+
+/**
+ * 宽屏上给正文收边：屏幕够宽时居中留白，窄屏时原样铺满。
+ * 只给「一列到底」的页面用，网格页自己会按列数自适应。
+ */
+@Composable
+private fun ReadableWidth(maxWidth: Dp = 760.dp, content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.widthIn(max = maxWidth).fillMaxHeight()) {
+            content()
+        }
+    }
+}
+
+/**
+ * 网格列数跟着屏宽走：手机三列，平板/横屏多给几列，但最多六列——
+ * 再细就看不清封面上的字了。
+ */
+@Composable
+private fun gridColumns(): Int =
+    (LocalConfiguration.current.screenWidthDp / 130).coerceIn(3, 6)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun App(vm: AppViewModel) {
     val state = vm.state
     val isRoot = state.screen == Screen.Home || state.screen == Screen.Search || state.screen == Screen.Mine
+    // 平板/横屏：宽度够就换导航形态，不然底部一条栏在 10 寸屏上离手指太远
+    val wide = LocalConfiguration.current.screenWidthDp >= WIDE_WIDTH_DP
     BackHandler(enabled = !isRoot) { vm.back() }
 
     Scaffold(
@@ -426,7 +462,7 @@ fun App(vm: AppViewModel) {
             }
         },
         bottomBar = {
-            if (isRoot) {
+            if (isRoot && !wide) {
                 NavigationBar {
                     NavigationBarItem(
                         selected = state.screen == Screen.Home,
@@ -450,7 +486,32 @@ fun App(vm: AppViewModel) {
             }
         },
     ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
+        Row(Modifier.padding(padding).fillMaxSize()) {
+            // 平板/横屏：底部导航换成左侧竖栏，省下的高度全给内容
+            if (isRoot && wide) {
+                NavigationRail(containerColor = MaterialTheme.colorScheme.surface) {
+                    NavigationRailItem(
+                        selected = state.screen == Screen.Home,
+                        onClick = vm::goHome,
+                        icon = { Icon(Icons.Filled.Home, contentDescription = null) },
+                        label = { Text("追番") },
+                    )
+                    NavigationRailItem(
+                        selected = state.screen == Screen.Search,
+                        onClick = vm::goSearch,
+                        icon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                        label = { Text("搜索") },
+                    )
+                    NavigationRailItem(
+                        selected = state.screen == Screen.Mine,
+                        onClick = vm::goMine,
+                        icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                        label = { Text("我的") },
+                    )
+                }
+                VerticalDivider()
+            }
+        Box(Modifier.weight(1f).fillMaxHeight()) {
             // 页面转场：前进时新页从右滑入，返回时从左滑入（带淡入，避免生硬）
             val trans = remember { androidx.compose.animation.core.Animatable(1f) }
             var lastScreen by remember { mutableStateOf(state.screen) }
@@ -480,18 +541,19 @@ fun App(vm: AppViewModel) {
             ) {
             when (state.screen) {
                 Screen.Home -> HomeScreen(vm, state)
-                Screen.Search -> SearchScreen(vm, state)
-                Screen.Mine -> MineScreen(vm, state)
-                Screen.Detail -> DetailScreen(vm, state)
-                Screen.Chapters -> ChaptersScreen(vm, state)
+                Screen.Search -> ReadableWidth { SearchScreen(vm, state) }
+                Screen.Mine -> ReadableWidth { MineScreen(vm, state) }
+                Screen.Detail -> ReadableWidth(DETAIL_MAX_WIDTH) { DetailScreen(vm, state) }
+                Screen.Chapters -> ReadableWidth { ChaptersScreen(vm, state) }
                 Screen.Player -> PlayerScreen(vm, state)
                 Screen.Verify -> VerifyScreen(vm, state)
-                Screen.Health -> HealthScreen(vm, state)
+                Screen.Health -> ReadableWidth { HealthScreen(vm, state) }
                 Screen.Season -> SeasonScreen(vm, state)
                 Screen.Index -> IndexScreen(vm, state)
-                Screen.Downloads -> DownloadsScreen(vm, state)
+                Screen.Downloads -> ReadableWidth { DownloadsScreen(vm, state) }
             }
             }
+        }
         }
     }
     UpdatePromptDialog(vm, state)
@@ -712,9 +774,11 @@ private fun SectionHeader(title: String, subtitle: String) {
 
 @Composable
 private fun ContinueCard(entry: WatchEntry, imageBase: String, onClick: () -> Unit) {
+    // 平板上卡片放大一点，不然一屏十几个小块看着散
+    val wide = LocalConfiguration.current.screenWidthDp >= WIDE_WIDTH_DP
     Column(
         Modifier
-            .width(140.dp)
+            .width(if (wide) 176.dp else 140.dp)
             .clickable(onClick = onClick)
     ) {
         Box(
@@ -780,7 +844,8 @@ private fun ContinueCard(entry: WatchEntry, imageBase: String, onClick: () -> Un
 
 @Composable
 private fun SubjectCard(subject: CatalogSubject, imageBase: String, onClick: () -> Unit) {
-    Column(Modifier.width(104.dp).clickable(onClick = onClick)) {
+    val wide = LocalConfiguration.current.screenWidthDp >= WIDE_WIDTH_DP
+    Column(Modifier.width(if (wide) 132.dp else 104.dp).clickable(onClick = onClick)) {
         Box(
             Modifier
                 .fillMaxWidth()
@@ -825,13 +890,15 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
     val watched = state.watches.any { it.subjectId == subject.id }
     val fromPlayer = state.detailOrigin == Screen.Player
     val summary = info?.summary?.takeIf { it.isNotBlank() } ?: subject.summary
+    // 平板上一列铺到 900dp 后，110dp 的封面小得像个缩略图，按屏宽放大
+    val posterWidth = (LocalConfiguration.current.screenWidthDp / 8).coerceIn(110, 200).dp
 
     LazyColumn(Modifier.fillMaxSize()) {
         item {
             Row(Modifier.padding(16.dp)) {
                 Box(
                     Modifier
-                        .width(110.dp)
+                        .width(posterWidth)
                         .aspectRatio(2f / 3f)
                         .clip(RoundedCornerShape(8.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
@@ -1814,7 +1881,7 @@ private fun IndexScreen(vm: AppViewModel, state: UiState) {
         }
 
         LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
+            columns = GridCells.Fixed(gridColumns()),
             contentPadding = PaddingValues(12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1979,7 +2046,7 @@ private fun SeasonScreen(vm: AppViewModel, state: UiState) {
         }
 
         LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
+            columns = GridCells.Fixed(gridColumns()),
             contentPadding = PaddingValues(12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
