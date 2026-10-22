@@ -70,7 +70,14 @@ jobs:
       - name: 收集产物
         run: |
           mkdir -p out
-          find app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          # 发布时只挂一个包：配了签名就挂 release，没配才挂 debug。
+          # 两个都挂上去，用户很可能点错下载到 debug 包。
+          ver="${GITHUB_REF_NAME#v}"
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk "out/komo-${ver}.apk"
+          else
+            cp app/build/outputs/apk/debug/app-debug.apk "out/komo-${ver}-debug.apk"
+          fi
           ls -lh out
 
       - uses: actions/upload-artifact@v4
