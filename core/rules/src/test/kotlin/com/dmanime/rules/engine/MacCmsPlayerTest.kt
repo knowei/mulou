@@ -39,6 +39,20 @@ class MacCmsPlayerTest {
         assertNull(MacCmsPlayer.embeddedMediaUrl(html))
     }
 
+    /** 新优酷：encrypt=2 是 base64(整串百分号编码的地址)。 */
+    @Test
+    fun `encrypt two decodes base64 escaped url`() {
+        val cipher = java.util.Base64.getEncoder().encodeToString(
+            "https%3A%2F%2Fsvip.xgplay13.com%2F2026-01-16%2F45690_SUNfc%2Findex.m3u8"
+                .toByteArray(Charsets.UTF_8),
+        )
+        val html = """var player_aaaa={"encrypt":2,"url":"$cipher"};</script>"""
+        assertEquals(
+            "https://svip.xgplay13.com/2026-01-16/45690_SUNfc/index.m3u8",
+            MacCmsPlayer.embeddedMediaUrl(html),
+        )
+    }
+
     @Test
     fun `player shell url is not treated as media`() {
         val html = """var player_aaaa={"encrypt":0,"url":"/static/player/xlm3u8.html?url=a.m3u8"};</script>"""

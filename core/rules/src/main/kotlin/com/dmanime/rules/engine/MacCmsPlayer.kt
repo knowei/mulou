@@ -33,21 +33,35 @@ object MacCmsPlayer {
         val raw = PLAYER_JSON.find(html)?.groupValues?.getOrNull(1) ?: return null
         val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
 
-        // encrypt=1 时 url 是密文，需要站点自己的解密接口，交给嗅探
         val encrypt = runCatching { obj["encrypt"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0 }
             .getOrDefault(0)
-        if (encrypt != 0) return null
 
         val declared = runCatching { obj["url"]?.jsonPrimitive?.content }.getOrNull().orEmpty().trim()
         if (declared.isEmpty()) return null
 
-        val url = absolute(pageUrl, declared) ?: return null
+        // encrypt=2：base64(百分号编码后的地址)，新优酷这类模板在用。
+        // encrypt=1 是站点自己的加密接口，解不了，交给嗅探。
+        val plain = when (encrypt) {
+            0 -> declared
+            2 -> decodeBase64Escaped(declared) ?: return null
+            else -> return null
+        }.trim()
+        if (plain.isEmpty()) return null
+
+        val url = absolute(pageUrl, plain) ?: return null
         if (!url.startsWith("http", ignoreCase = true)) return null
         // 只认媒体地址，避免把播放器壳页（player.html?url=...）当成流
         val path = url.substringBefore('?').substringBefore('#')
         if (!MEDIA.containsMatchIn(path)) return null
         return url
     }
+
+    /** base64 解出来是 `%68%74%74%70...` 这种全量百分号编码的地址，再解一层。 */
+    private fun decodeBase64Escaped(cipher: String): String? = runCatching {
+        val decoded = String(java.util.Base64.getDecoder().decode(cipher), Charsets.UTF_8)
+        // URLDecoder 会把 '+' 当空格，先把它保护起来
+        java.net.URLDecoder.decode(decoded.replace("+", "%2B"), "UTF-8")
+    }.getOrNull()
 
     private fun absolute(pageUrl: String, raw: String): String? {
         if (raw.startsWith("http", ignoreCase = true)) return raw

@@ -78,6 +78,11 @@ android {
             if (canSign) signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+        // debug 也用同一份 key：这样 debug 包能直接覆盖装到 release 包上，
+        // 不用卸载（卸载会丢追番记录、下载的剧集和导进来的规则）。
+        debug {
+            if (canSign) signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     compileOptions {
