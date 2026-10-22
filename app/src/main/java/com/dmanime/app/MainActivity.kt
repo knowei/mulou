@@ -370,8 +370,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 宽度到这个 dp 就当平板/横屏看待（普通手机竖屏都在 400 上下）。 */
-private const val WIDE_WIDTH_DP = 700
+/** 短边到这个 dp 就当平板看待（Android 官方口径：sw≥600dp 是平板，手机竖屏 360~430）。 */
+private const val WIDE_WIDTH_DP = 600
 
 /** 详情页在宽屏上最多铺这么宽，再宽眼睛要来回扫。 */
 private val DETAIL_MAX_WIDTH = 900.dp
@@ -403,7 +403,7 @@ fun App(vm: AppViewModel) {
     val state = vm.state
     val isRoot = state.screen == Screen.Home || state.screen == Screen.Search || state.screen == Screen.Mine
     // 平板/横屏：宽度够就换导航形态，不然底部一条栏在 10 寸屏上离手指太远
-    val wide = LocalConfiguration.current.screenWidthDp >= WIDE_WIDTH_DP
+    val wide = LocalConfiguration.current.smallestScreenWidthDp >= WIDE_WIDTH_DP
     BackHandler(enabled = !isRoot) { vm.back() }
 
     Scaffold(
@@ -775,7 +775,7 @@ private fun SectionHeader(title: String, subtitle: String) {
 @Composable
 private fun ContinueCard(entry: WatchEntry, imageBase: String, onClick: () -> Unit) {
     // 平板上卡片放大一点，不然一屏十几个小块看着散
-    val wide = LocalConfiguration.current.screenWidthDp >= WIDE_WIDTH_DP
+    val wide = LocalConfiguration.current.smallestScreenWidthDp >= WIDE_WIDTH_DP
     Column(
         Modifier
             .width(if (wide) 176.dp else 140.dp)
@@ -844,7 +844,7 @@ private fun ContinueCard(entry: WatchEntry, imageBase: String, onClick: () -> Un
 
 @Composable
 private fun SubjectCard(subject: CatalogSubject, imageBase: String, onClick: () -> Unit) {
-    val wide = LocalConfiguration.current.screenWidthDp >= WIDE_WIDTH_DP
+    val wide = LocalConfiguration.current.smallestScreenWidthDp >= WIDE_WIDTH_DP
     Column(Modifier.width(if (wide) 132.dp else 104.dp).clickable(onClick = onClick)) {
         Box(
             Modifier
@@ -3599,12 +3599,16 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
     }
 
     // 全屏：横屏 + 隐藏系统栏
+    // 全屏：横屏 + 隐藏系统栏。
+    // 平板不强制竖屏——否则横着拿平板点播放，画面会先猛地转 90°；
+    // 手机还是竖屏看（详情/选集在视频下面，横过来反而不好操作）。
+    val tabletLayout = LocalConfiguration.current.smallestScreenWidthDp >= WIDE_WIDTH_DP
     LaunchedEffect(state.playerFullscreen) {
         val act = context as? Activity ?: return@LaunchedEffect
-        act.requestedOrientation = if (state.playerFullscreen) {
-            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        } else {
-            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        act.requestedOrientation = when {
+            state.playerFullscreen -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            tabletLayout -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            else -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
         val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
         if (state.playerFullscreen) {
@@ -3667,6 +3671,13 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
     var showSources by remember { mutableStateOf(false) }
     // 视频下方分两栏：番剧详情 / 这一集的评论（评论按用户要求不放进详情页）
     var playerTab by remember { mutableStateOf(0) }
+    // 宽屏上 16:9 会把整屏吃光（横屏平板 1706dp 宽算下来要 960dp 高），
+    // 底下选集/评论只剩一条缝。这里给视频高度封顶，画面自己留黑边。
+    val screenCfg = LocalConfiguration.current
+    val videoHeight = minOf(
+        screenCfg.screenWidthDp * 9f / 16f,
+        screenCfg.screenHeightDp * 0.62f,
+    ).dp
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -3674,7 +3685,7 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
+                        .height(videoHeight)
                         .background(Color.Black)
                 ) {
                     AndroidView(
