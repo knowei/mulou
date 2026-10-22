@@ -10,7 +10,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -46,6 +48,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
@@ -2162,10 +2165,12 @@ private fun DownloadEpisodeRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MineScreen(vm: AppViewModel, state: UiState) {
     val clipboard = LocalClipboardManager.current
     var showAllRules by remember { mutableStateOf(false) }
+    var ruleToDelete by remember { mutableStateOf<AnimeRule?>(null) }
     val ctx = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -2265,6 +2270,16 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
         }
 
         item { MineSection("规则") }
+        if (state.rules.isNotEmpty()) {
+            item {
+                Text(
+                    "长按任意一条可以删除",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 2.dp),
+                )
+            }
+        }
         item {
             Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                 Column(Modifier.padding(14.dp)) {
@@ -2322,7 +2337,10 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .clickable { vm.selectRule(rule) }
+                    .combinedClickable(
+                        onClick = { vm.selectRule(rule) },
+                        onLongClick = { ruleToDelete = rule },
+                    )
             ) {
                 Row(
                     Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -2479,6 +2497,27 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                 }
             }
         }
+    }
+
+    ruleToDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { ruleToDelete = null },
+            title = { Text("删除规则") },
+            text = {
+                Text("删掉「${target.name}」？已下载的剧集和追番记录不受影响，只是搜源时不再用它。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.removeRule(target.name)
+                        ruleToDelete = null
+                    }
+                ) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { ruleToDelete = null }) { Text("取消") }
+            },
+        )
     }
 }
 

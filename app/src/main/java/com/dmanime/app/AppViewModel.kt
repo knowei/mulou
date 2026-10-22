@@ -1739,6 +1739,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun addDemoRule() = importRules(DEMO_RULE)
 
     /**
+     * 删掉一条规则。
+     *
+     * 死站的规则留着只会有代价：每次搜源都要多等一个超时，源体检也要多跑一遍。
+     */
+    fun removeRule(name: String) {
+        val left = state.rules.filterNot { it.name == name }
+        if (left.size == state.rules.size) return
+        state = state.copy(
+            rules = left,
+            selected = state.selected?.takeIf { it.name != name },
+            error = null,
+        )
+        appendLog("删除规则：$name（剩 ${left.size} 条）")
+        persist()
+    }
+
+    /**
      * 从规则源导入。
      *
      * 只拉 `index.json` 里列出的规则（仓库用 deprecated 标记下架的不会进来），
