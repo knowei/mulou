@@ -2507,12 +2507,19 @@ private data class SourceGroup(
     val entries: List<Pair<AnimeRule, SearchItem>>,
 )
 
-private fun buildSourceGroups(state: UiState): List<SourceGroup> {
+private fun buildSourceGroups(state: UiState, rank: (String) -> Int): List<SourceGroup> {
     val available = state.hits.filter { it.error == null && it.items.isNotEmpty() }
     val groups = LinkedHashMap<String, MutableList<Pair<AnimeRule, SearchItem>>>()
     for (hit in available) {
+        // 每条规则可能有多个搜索结果（同一部番的不同季/剧场版），取标题最像的那条；
+        // 全都对不上就把这条规则整条略过，免得面板里点到别的季。
+        val best = hit.items
+            .map { it to rank(it.name) }
+            .filter { it.second >= 0 }
+            .maxByOrNull { it.second }
+            ?: continue
         val host = hit.rule.baseUrl.trimEnd('/').lowercase().removePrefix("https://").removePrefix("http://")
-        groups.getOrPut(host) { mutableListOf() }.add(hit.rule to hit.items.first())
+        groups.getOrPut(host) { mutableListOf() }.add(hit.rule to best.first)
     }
     return groups.map { (host, entries) ->
         SourceGroup(host = host, title = entries.first().first.name, entries = entries)
@@ -2521,7 +2528,7 @@ private fun buildSourceGroups(state: UiState): List<SourceGroup> {
 
 /** 播放页顶部的源入口：一行显示当前源 + 源数量，点击弹面板。 */
 @Composable
-private fun SourceBar(state: UiState, onClick: () -> Unit) {
+private fun SourceBar(state: UiState, rank: (String) -> Int, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -2530,7 +2537,7 @@ private fun SourceBar(state: UiState, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val groupCount = buildSourceGroups(state).size
+        val groupCount = buildSourceGroups(state, rank).size
         val failedCount = state.hits.count { it.error != null || it.items.isEmpty() }
         Text(
             if (state.entryRuleName.isEmpty()) "正在找源…" else "▶ ${state.entryRuleName}",
@@ -2552,7 +2559,7 @@ private fun SourceBar(state: UiState, onClick: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SourceSheet(vm: AppViewModel, state: UiState, onDismiss: () -> Unit) {
-    val groups = remember(state.hits, state.sourceStatus) { buildSourceGroups(state) }
+    val groups = remember(state.hits, state.sourceStatus) { buildSourceGroups(state, vm::titleRank) }
     val failedHits = remember(state.hits) {
         state.hits.filter { it.error != null || it.items.isEmpty() }
     }
@@ -3131,7 +3138,7 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             }
 
             if (state.entryRuleName.isNotEmpty()) {
-                SourceBar(state) { showSources = true }
+                SourceBar(state, vm::titleRank) { showSources = true }
             }
             if (showSources) {
                 SourceSheet(vm, state) { showSources = false }

@@ -1460,6 +1460,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 源面板用：按标题匹配度给候选打分。
+     *
+     * 面板原来无条件取每条规则的第一个搜索结果，遇到「站点把同系列另一季排在
+     * 前面」的情况会切到错的季。负分代表标题对不上，面板里直接不显示。
+     */
+    fun titleRank(name: String): Int =
+        titleScore(state.playQuery.ifBlank { state.keyword }, name)
+
     /** 切到指定源的指定线路，保持当前集数。 */
     fun playRoad(rule: AnimeRule, item: SearchItem, roadIndex: Int) {
         autoPlayArmed = true
