@@ -24,6 +24,7 @@ import com.dmanime.catalog.SubjectDetail
 import com.dmanime.danmaku.BiliReply
 import com.dmanime.danmaku.Danmaku
 import com.dmanime.danmaku.DanmakuOrigin
+import com.dmanime.rules.EpisodeIndex
 import com.dmanime.rules.css1.Css1Converter
 import com.dmanime.rules.engine.MacCmsPlayer
 import com.dmanime.rules.engine.RuleEngine
@@ -261,9 +262,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 一次最多探几部，避免一口气把站点打成筛子。 */
         const val MAX_WATCH_PROBES = 4
-
-        /** 集号：认得 "第5.5集"、"05"、"EP12" 这类写法，第一组是数字本体（可带小数）。 */
-        val EPISODE_NO = Regex("""第?\s*(\d+(?:\.\d+)?)""")
     }
 
     var state by mutableStateOf(UiState())
@@ -1641,35 +1639,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 集数对齐：换源时按"第 N 集"找，而不是直接用索引。 */
-    private fun matchEpisodeIndex(road: Road, number: Int): Int? {
-        road.names.forEachIndexed { index, name ->
-            if (parseEpisodeNumber(name) == number) return index
-        }
-        // 没有任何集名时按顺序推断，但必须确认线路里真有这么多集；
-        // 这里**不能**回退到最后集，否则第 5 集会静默播成第 4 集。
-        if (road.names.all { it.isNullOrBlank() }) {
-            return (number - 1).takeIf { it in road.urls.indices }
-        }
-        return null
-    }
+    private fun matchEpisodeIndex(road: Road, number: Int): Int? =
+        EpisodeIndex.match(road.names, road.urls.size, number)
 
     /**
      * 集号解析。要能认出 "5.5" 这种半集：片源里常把总集篇/OVA 插在正片中间
      * （第5集、第5.5集、第6集），当整数读会把 5.5 当成第 5 集，
      * 于是点"第5集"播到特别篇、点"第6集"播到第 5 集，整条线错位一格。
      */
-    private fun parseEpisodeNo(name: String?): Double? {
-        val text = name ?: return null
-        val match = EPISODE_NO.find(text) ?: return null
-        return match.groupValues[1].toDoubleOrNull()
-    }
+    private fun parseEpisodeNo(name: String?): Double? = EpisodeIndex.parseNo(name)
 
     /** 只认整数集号：5.5 集既不顶替第 5 集，也不顶替第 6 集。 */
-    private fun parseEpisodeNumber(name: String?): Int? {
-        val no = parseEpisodeNo(name) ?: return null
-        val whole = no.toInt()
-        return whole.takeIf { no == it.toDouble() }
-    }
+    private fun parseEpisodeNumber(name: String?): Int? = EpisodeIndex.parseWhole(name)
 
     // ---------- 规则 ----------
 
