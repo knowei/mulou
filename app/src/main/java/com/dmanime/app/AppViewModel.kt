@@ -21,6 +21,7 @@ import com.dmanime.catalog.SubjectCharacter
 import com.dmanime.catalog.Images
 import com.dmanime.catalog.SearchResult
 import com.dmanime.catalog.SubjectDetail
+import com.dmanime.danmaku.BiliReply
 import com.dmanime.danmaku.Danmaku
 import com.dmanime.danmaku.DanmakuOrigin
 import com.dmanime.rules.css1.Css1Converter
@@ -201,6 +202,19 @@ data class UiState(
     val danmakuPickable: Set<DanmakuOrigin> = setOf(DanmakuOrigin.Catalog, DanmakuOrigin.Ugc),
     /** 勾了但没取到的来源及原因，例如「用户投稿：没找到对得上的搬运」。 */
     val danmakuMissing: String = "",
+    /**
+     * 播放页「评论」tab：这一集的 B 站评论区。
+     *
+     * 懒加载——切到评论 tab 才去取，不影响起播。
+     */
+    val comments: List<BiliReply> = emptyList(),
+    val commentsLoading: Boolean = false,
+    val commentsError: String = "",
+    /** 评论区归属说明，例如「哔哩哔哩 · 葬送的芙莉莲 中配版 第1集」。 */
+    val commentsTitle: String = "",
+    /** 这一集评论总数（B 站 all_count）。 */
+    val commentsTotal: Int = 0,
+    val commentsHasMore: Boolean = false,
     /** 主题：light / dark / system */
     val themeMode: String = "light",
     /** 导航方向：true=前进（新页面从右滑入），false=返回（从左滑入） */
@@ -276,6 +290,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 已经加载过弹幕的 `subjectId-episode`，避免同一集重复请求。 */
     private var danmakuLoadedKey = ""
+
+    /** 评论区当前挂在哪一集上，以及下一页游标——换集必须从头开始。 */
+    private var commentsKey = ""
+    private var commentsNext = 0L
 
     /** 自动播放管线：armed 表示当前这次播放允许自动找源/换源。 */
     private var autoPlayArmed = false
@@ -1946,8 +1964,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             danmakuError = "",
             danmakuMissing = "",
             danmakuLoading = false,
+            // 评论是每集一份，换集必须清掉重取
+            comments = emptyList(),
+            commentsLoading = false,
+            commentsError = "",
+            commentsTitle = "",
+            commentsTotal = 0,
+            commentsHasMore = false,
         )
         danmakuLoadedKey = ""
+        commentsKey = ""
+        commentsNext = 0L
         appendLog("打开播放页: $url")
         probeEmbeddedMedia(url)
     }
@@ -2328,6 +2355,77 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         detail?.name?.takeIf { it.isNotBlank() }?.let { list += it }
         state.title.substringBefore(" · ").takeIf { it.isNotBlank() }?.let { list += it }
         return list.distinct()
+    }
+
+    // ---------- 评论区 ----------
+
+    /**
+     * 切到「评论」tab 时叫一次：这一集还没取过才去取。
+     *
+     * 懒加载是刻意的——起播时多打一次 B 站接口没有收益，大部分人根本不看评论。
+     */
+    fun ensureComments() {
+        val subjectId = state.playSubjectId
+        val episode = state.playEpisodeIndex + 1
+        if (subjectId == 0 || episode <= 0) return
+        val key = "$subjectId-$episode"
+        if (commentsKey == key || state.commentsLoading) return
+        loadComments(key, reset = true)
+    }
+
+    /** 滑到底时叫：接着取下一页。 */
+    fun loadMoreComments() {
+        if (!state.commentsHasMore || state.commentsLoading) return
+        loadComments(commentsKey, reset = false)
+    }
+
+    fun retryComments() {
+        commentsKey = ""
+        ensureComments()
+    }
+
+    private fun loadComments(key: String, reset: Boolean) {
+        val subjectId = state.playSubjectId
+        val episode = state.playEpisodeIndex + 1
+        val titles = danmakuTitles()
+        if (titles.isEmpty()) {
+            state = state.copy(commentsError = "不知道这一集叫什么，没法匹配评论")
+            return
+        }
+        val total = state.detailInfo?.totalEpisodes?.takeIf { it > 0 }
+            ?: state.detailInfo?.episodeCount
+            ?: 0
+        val next = if (reset) 0L else commentsNext
+        commentsKey = key
+        state = state.copy(
+            comments = if (reset) emptyList() else state.comments,
+            commentsLoading = true,
+            commentsError = "",
+        )
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                danmakuRepo.loadReplies(subjectId, episode, titles, total, next)
+            }
+            result.onSuccess { bundle ->
+                commentsNext = bundle.next
+                state = state.copy(
+                    commentsLoading = false,
+                    comments = (if (reset) emptyList() else state.comments) + bundle.replies,
+                    commentsTitle = "哔哩哔哩 · ${bundle.seasonTitle} · ${bundle.episodeTitle}".trim(),
+                    commentsTotal = bundle.total,
+                    commentsHasMore = bundle.hasMore,
+                    commentsError = "",
+                )
+            }.onFailure { error ->
+                // 第一页失败就允许重试；翻页失败保留已有内容
+                if (reset) commentsKey = ""
+                state = state.copy(
+                    commentsLoading = false,
+                    commentsError = error.message ?: "取评论失败",
+                    commentsHasMore = false,
+                )
+            }
+        }
     }
 
     fun toggleDanmaku() {

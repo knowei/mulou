@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -85,6 +86,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -117,6 +119,7 @@ import com.dmanime.app.download.DownloadItem
 import com.dmanime.app.download.humanSize
 import com.dmanime.catalog.AiringState
 import com.dmanime.catalog.CatalogSubject
+import com.dmanime.danmaku.BiliReply
 import com.dmanime.danmaku.DanmakuOrigin
 import com.dmanime.rules.model.AnimeRule
 import com.dmanime.rules.model.SearchItem
@@ -3110,6 +3113,8 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
     }
 
     var showSources by remember { mutableStateOf(false) }
+    // 视频下方分两栏：番剧详情 / 这一集的评论（评论按用户要求不放进详情页）
+    var playerTab by remember { mutableStateOf(0) }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -3217,6 +3222,9 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                 SourceSheet(vm, state) { showSources = false }
             }
 
+            PlayerTabBar(selected = playerTab, onSelect = { playerTab = it })
+
+            if (playerTab == 0) {
             PullToRefreshBox(
                 isRefreshing = state.busy,
                 onRefresh = { vm.refreshSources() },
@@ -3329,6 +3337,9 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                 item { Spacer(Modifier.height(24.dp)) }
             }
             }
+            } else {
+                CommentsPane(vm, state, Modifier.weight(1f))
+            }
         }
 
         // 2dp 的 WebView：必须挂在窗口上，JS 定时器才会正常跑
@@ -3339,6 +3350,216 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             )
         }
     }
+}
+
+/** 播放页视频下方：详情 / 评论 两栏。 */
+@Composable
+private fun PlayerTabBar(selected: Int, onSelect: (Int) -> Unit) {
+    val tabs = listOf("详情", "评论")
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        tabs.forEachIndexed { index, title ->
+            val active = index == selected
+            Column(
+                Modifier.clickable { onSelect(index) }.padding(vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (active) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                // 选中态用一条短横线，比整块背景干净
+                Box(
+                    Modifier
+                        .height(2.dp)
+                        .width(if (active) 18.dp else 0.dp)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 这一集的评论区（B 站）。
+ *
+ * 每集一份，跟选集联动；滑到底自动翻页。取不到就明说为什么，不留空白。
+ */
+@Composable
+private fun CommentsPane(vm: AppViewModel, state: UiState, modifier: Modifier = Modifier) {
+    LaunchedEffect(state.playSubjectId, state.playEpisodeIndex) { vm.ensureComments() }
+
+    val listState = rememberLazyListState()
+    LaunchedEffect(listState, state.comments.size, state.commentsHasMore) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+            .collect { last ->
+                if (state.commentsHasMore && state.comments.size > 0 && last >= state.comments.size - 3) {
+                    vm.loadMoreComments()
+                }
+            }
+    }
+
+    if (state.comments.isEmpty() && state.commentsError.isBlank() && state.commentsLoading) {
+        Box(modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.TopCenter) {
+            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+        }
+        return
+    }
+
+    if (state.comments.isEmpty() && state.commentsError.isNotBlank()) {
+        Column(
+            modifier.fillMaxWidth().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                state.commentsError,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = { vm.retryComments() }) { Text("重试") }
+        }
+        return
+    }
+
+    LazyColumn(state = listState, modifier = modifier.fillMaxWidth()) {
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    state.commentsTitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                if (state.commentsTotal > 0) {
+                    Text(
+                        "共 ${state.commentsTotal} 条",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        items(state.comments, key = { it.rpid }) { reply -> CommentRow(reply) }
+        item {
+            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                when {
+                    state.commentsLoading -> CircularProgressIndicator(
+                        Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+
+                    state.commentsHasMore -> Text(
+                        "上滑加载更多",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    else -> Text(
+                        "没有更多了",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommentRow(reply: BiliReply) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                reply.user,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            reply.location.takeIf { it.isNotBlank() }?.let {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                formatCommentTime(reply.ctime),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(reply.message, style = MaterialTheme.typography.bodyMedium)
+        if (reply.like > 0 || reply.replyCount > 0) {
+            Row(Modifier.padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (reply.like > 0) {
+                    Text(
+                        "赞 ${reply.like}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (reply.replyCount > 0) {
+                    Text(
+                        "回复 ${reply.replyCount}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        // 楼中楼只铺前三条：够看出在聊什么，又不至于把一屏占满
+        if (reply.preview.isNotEmpty()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 5.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        RoundedCornerShape(6.dp),
+                    )
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                reply.preview.forEach { sub ->
+                    Row {
+                        Text(
+                            "${sub.user}：",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            sub.message,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 评论时间：今年只显示月日，往年带上年份。 */
+private fun formatCommentTime(seconds: Long): String {
+    if (seconds <= 0) return ""
+    val cal = java.util.Calendar.getInstance().apply { timeInMillis = seconds * 1000 }
+    val now = java.util.Calendar.getInstance()
+    val pattern = if (cal.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR)) {
+        "MM-dd HH:mm"
+    } else {
+        "yyyy-MM-dd"
+    }
+    return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(cal.time)
 }
 
 @Composable

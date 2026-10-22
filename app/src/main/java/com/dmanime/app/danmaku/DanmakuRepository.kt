@@ -3,6 +3,7 @@ package com.dmanime.app.danmaku
 import android.content.Context
 import com.dmanime.app.BuildConfig
 import com.dmanime.danmaku.BiliDanmakuClient
+import com.dmanime.danmaku.BiliReply
 import com.dmanime.danmaku.DanDanPlayClient
 import com.dmanime.danmaku.DanDanPlayEpisode
 import com.dmanime.danmaku.Danmaku
@@ -35,6 +36,18 @@ data class DanmakuBundle(
     val origins: Set<DanmakuOrigin> = emptySet(),
     /** 选了但没取到的来源，附一句原因——多选时不能悄悄少一个源。 */
     val failures: Map<DanmakuOrigin, String> = emptyMap(),
+)
+
+/** 一集评论区的加载结果。 */
+data class ReplyBundle(
+    val replies: List<BiliReply>,
+    /** 下一页游标，0 表示到底了。 */
+    val next: Long,
+    val hasMore: Boolean,
+    /** 这一集评论总数（B 站给的 all_count）。 */
+    val total: Int,
+    val seasonTitle: String,
+    val episodeTitle: String,
 )
 
 /**
@@ -198,6 +211,57 @@ class DanmakuRepository(context: Context) {
         // B 站集号有缺号（总集篇、特别篇占位）时，退回按顺序取
         list.getOrNull(episode - 1)?.let { return it }
         return null
+    }
+
+    // ---------------- 评论区 ----------------
+
+    /**
+     * 取某一集的评论区。
+     *
+     * 走的是和弹幕同一套「这部剧在 B 站是哪个 season、这一集是哪个 episode」的匹配，
+     * 但评论挂在每集自己的 aid 上（不是 cid），所以一集一个评论区，和播放页对得上。
+     * [next] 是翻页游标，第一页传 0。
+     */
+    fun loadReplies(
+        subjectId: Int,
+        episode: Int,
+        titles: List<String>,
+        expectedEpisodes: Int,
+        next: Long = 0,
+    ): Result<ReplyBundle> {
+        val queries = titles.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (queries.isEmpty()) return Result.failure(IllegalStateException("没有可用的番剧名"))
+
+        val season = seasonFor(subjectId, queries, expectedEpisodes)
+            ?: return Result.failure(IllegalStateException("B 站番剧库没有这部剧，取不到评论"))
+
+        val episodes = runCatching { client.episodes(season.seasonId) }.getOrElse {
+            return Result.failure(it)
+        }
+        if (episodes.isEmpty()) return Result.failure(IllegalStateException("这一季没有可用的分集"))
+
+        val target = pickEpisode(subjectId, episode, episodes)
+            ?: return Result.failure(IllegalStateException("番剧库没有第 $episode 集"))
+        if (target.aid <= 0L) {
+            return Result.failure(IllegalStateException("这一集没有对应的评论区"))
+        }
+
+        val page = runCatching { client.replyPage(target.aid, next) }.getOrElse {
+            return Result.failure(it)
+        }
+        if (page.replies.isEmpty() && next == 0L) {
+            return Result.failure(IllegalStateException("这一集还没有评论"))
+        }
+        return Result.success(
+            ReplyBundle(
+                replies = page.replies,
+                next = page.next,
+                hasMore = page.hasMore,
+                total = page.total,
+                seasonTitle = season.title,
+                episodeTitle = target.longTitle.ifBlank { target.title },
+            )
+        )
     }
 
     // ---------------- UGC 区投稿 ----------------

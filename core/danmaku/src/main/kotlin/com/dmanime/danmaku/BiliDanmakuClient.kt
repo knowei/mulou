@@ -93,6 +93,8 @@ class BiliDanmakuClient(
                 longTitle = stripTags(obj.string("long_title")),
                 cid = cid,
                 durationMs = (obj["duration"]?.jsonPrimitive?.longOrNull ?: 0L) * 1,
+                // 每集的 aid 各不相同，评论区按它取
+                aid = obj["aid"]?.jsonPrimitive?.longOrNull ?: 0L,
             )
         }
     }
@@ -143,6 +145,8 @@ class BiliDanmakuClient(
             ?.jsonObject ?: return emptyList()
         val title = stripTags(data.string("title"))
         val pages = data["pages"] as? JsonArray ?: return emptyList()
+        // 分 P 共用稿件的 aid：评论区是整个合集的，不是单独某一 P 的
+        val aid = data["aid"]?.jsonPrimitive?.longOrNull ?: 0L
 
         return pages.mapNotNull { element ->
             val obj = element as? JsonObject ?: return@mapNotNull null
@@ -156,8 +160,36 @@ class BiliDanmakuClient(
                 cid = cid,
                 // 分 P 的时长单位是秒，统一换成毫秒，跟番剧库那条路保持一致
                 durationMs = (obj["duration"]?.jsonPrimitive?.longOrNull ?: 0L) * 1000,
+                aid = aid,
             )
         }
+    }
+
+    // ---------------- 评论 ----------------
+
+    /**
+     * 取一条稿件的评论区（按热度）。
+     *
+     * 番剧库里每集一个 aid，所以这里天然就是「这一集的评论区」。
+     * `next` 是接口给的游标，第一页传 0。
+     */
+    fun replyPage(aid: Long, next: Long = 0, mode: Int = MODE_HOT): BiliReplyPage {
+        if (aid <= 0) return BiliReplyPage.EMPTY
+        val key = mixinKey() ?: return BiliReplyPage.EMPTY
+        val params = BiliWbi.sign(
+            mapOf(
+                "oid" to aid.toString(),
+                "type" to "1",
+                "mode" to mode.toString(),
+                "next" to next.toString(),
+                "ps" to PAGE_SIZE.toString(),
+            ),
+            nowSeconds(),
+            key,
+        )
+        val url = "https://api.bilibili.com/x/v2/reply/wbi/main?" +
+            params.entries.joinToString("&") { (k, v) -> "$k=${encodeComponent(v)}" }
+        return BiliReplyParser.parsePage(getJson(url))
     }
 
     // ---------------- 弹幕 ----------------
@@ -224,6 +256,10 @@ class BiliDanmakuClient(
 
     private companion object {
         const val MIXIN_TTL_SECONDS = 3600L
+        const val PAGE_SIZE = 20
+
+        /** 3 = 按热度，2 = 按时间。 */
+        const val MODE_HOT = 3
         const val DEFAULT_UA =
             "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"

@@ -26,8 +26,14 @@ data class DanmakuEpisode(
     val index: Int,
     val title: String,
     val longTitle: String,
+    /** 分 P 的弹幕库编号。 */
     val cid: Long,
     val durationMs: Long,
+    /**
+     * 稿件的 aid，评论区挂在它上面（弹幕挂 cid）。
+     * 用户投稿那条路一个稿件有多个分 P，它们共用同一个 aid，所以评论是整条视频的。
+     */
+    val aid: Long = 0L,
 )
 
 /** 一部作品在 B 站的登记信息。 */
