@@ -162,6 +162,10 @@ class DanDanPlayClient(
                 throw IllegalStateException(
                     when {
                         code == 403 && reason.isBlank() -> "弹弹play 拒绝访问（AppId 未生效或应用未通过审核）"
+                        reason.contains("Invalid AppId", ignoreCase = true) ->
+                            "弹弹play 未启用：服务端不认这个 AppId（应用大概还在审核）"
+                        reason.contains("not approved", ignoreCase = true) ->
+                            "弹弹play 未启用：应用还没有通过审核"
                         reason.isBlank() -> "弹弹play 返回 $code"
                         else -> "弹弹play 拒绝访问：$reason"
                     },

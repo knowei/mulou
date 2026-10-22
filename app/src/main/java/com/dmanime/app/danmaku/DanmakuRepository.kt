@@ -4,6 +4,7 @@ import android.content.Context
 import com.dmanime.app.BuildConfig
 import com.dmanime.danmaku.BiliDanmakuClient
 import com.dmanime.danmaku.DanDanPlayClient
+import com.dmanime.danmaku.DanDanPlayEpisode
 import com.dmanime.danmaku.Danmaku
 import com.dmanime.danmaku.DanmakuEpisode
 import com.dmanime.danmaku.DanmakuMatcher
@@ -277,8 +278,13 @@ class DanmakuRepository(context: Context) {
 
         val cached = prefs.getLong("ddp:$subjectId:$episode", 0L).takeIf { it > 0 }
         val episodeId = cached ?: run {
-            val match = searchDanDanPlay(subjectId, episode, queries)
-                ?: return Result.failure(IllegalStateException("弹弹play 没有匹配到这部剧"))
+            // 搜索里的鉴权/网络异常要原样抛出去：403 Invalid AppId 被吞成
+            // "没有匹配到这部剧"，会让人以为是片库里真没有，其实是应用还没过审
+            val match = try {
+                searchDanDanPlay(subjectId, episode, queries)
+            } catch (e: Exception) {
+                return Result.failure(e)
+            } ?: return Result.failure(IllegalStateException("弹弹play 没有匹配到这部剧"))
             prefs.edit().putLong("ddp:$subjectId:$episode", match.episodeId).apply()
             match.episodeId
         }
@@ -300,23 +306,27 @@ class DanmakuRepository(context: Context) {
         return Result.success(bundle)
     }
 
-    private fun searchDanDanPlay(subjectId: Int, episode: Int, queries: List<String>) =
-        runCatching {
-            for (query in queries) {
-                val animes = ddpClient.searchEpisodes(query, episode)
-                for (anime in animes) {
-                    // 标题要和番剧名对得上，否则宁可不选
-                    if (!UgcMatcher.titleOk(query, anime.animeTitle)) continue
-                    val target = anime.episodes.firstOrNull() ?: continue
-                    prefs.edit()
-                        .putString("ddpTitle:$subjectId", anime.animeTitle)
-                        .putString("ddpEp:$subjectId:$episode", target.episodeTitle)
-                        .apply()
-                    return@runCatching target
-                }
+    /** 抛异常表示"请求本身失败"（鉴权/网络），返回 null 才是"搜到但没对得上的"。 */
+    private fun searchDanDanPlay(
+        subjectId: Int,
+        episode: Int,
+        queries: List<String>,
+    ): DanDanPlayEpisode? {
+        for (query in queries) {
+            val animes = ddpClient.searchEpisodes(query, episode)
+            for (anime in animes) {
+                // 标题要和番剧名对得上，否则宁可不选
+                if (!UgcMatcher.titleOk(query, anime.animeTitle)) continue
+                val target = anime.episodes.firstOrNull() ?: continue
+                prefs.edit()
+                    .putString("ddpTitle:$subjectId", anime.animeTitle)
+                    .putString("ddpEp:$subjectId:$episode", target.episodeTitle)
+                    .apply()
+                return target
             }
-            null
-        }.getOrNull()
+        }
+        return null
+    }
 
     // ---------------- 缓存 ----------------
 
