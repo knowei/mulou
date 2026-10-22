@@ -282,8 +282,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var attempting = false
     private var autoPlayJob: kotlinx.coroutines.Job? = null
     private var onlineJob: kotlinx.coroutines.Job? = null
-    /** 选集弹层正在等集数：每个源到货就试一次，拿到线路就停。 */
-    private var pendingPicker = false
     /** 所有候选源都缺这一集时，记下最接近的缺口用于提示。 */
     private var gateCandidate: EpisodeGate? = null
     private val triedSources = mutableSetOf<String>()
@@ -1026,7 +1024,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 用户不需要在搜索页挑源——源的选择被推迟到"播不动"的时候。
      */
-    fun startPlayback(subject: CatalogSubject) {
+    fun startPlayback(subject: CatalogSubject, episode: Int = 1) {
         rememberKeyword(subject.displayTitle)
         autoPlayArmed = true
         attempting = false
@@ -1048,7 +1046,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             playPageUrl = "",
             playStartMs = 0,
             playEpisodeIndex = -1,
-            episodeNumber = 1,
+            episodeNumber = if (episode > 0) episode else 1,
             failedSources = emptySet(),
             autoSwitches = 0,
             hits = emptyList(),
@@ -1161,29 +1159,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         appendLog("自动连播：第 ${next + 1} 集")
         play(road, next)
     }
-    /** 详情页的「选集」：弹集数面板；还没找到源就先自动找。 */
+    /**
+     * 详情页的「选集」。
+     *
+     * 集数以**官方（Bangumi）为准**，不去等片源：以前这里会先搜源、拿片源的
+     * 线路集数来铺格子，于是出现两种尴尬——没播的集也照样列出来（片源排到 13 集，
+     * 但官方只播到 3 集），而且片源集号一乱，点"第 5 集"可能播到别的东西。
+     * 现在格子就是 1…总集数，点哪集就按"官方第 N 集"去播，由播放页挑源对齐。
+     */
     fun openEpisodeSheet() {
-        if (state.roads.isNotEmpty()) {
-            state = state.copy(episodeSheet = true, episodeLoading = false)
-            return
-        }
-        state = state.copy(episodeSheet = true, episodeLoading = true)
-        val subject = state.detail ?: return
-        pendingPicker = true
-        val existing = candidates().firstOrNull()
-        if (existing != null) {
-            fillPicker(existing.first, existing.second)
-        } else if (state.hits.isEmpty()) {
-            searchSources(subject.displayTitle)
-        }
+        val id = state.detail?.id ?: state.playSubjectId
+        if (id != 0 && state.detailInfo?.id != id) loadDetailInfo(id)
+        state = state.copy(episodeSheet = true, episodeLoading = false)
     }
 
     fun closeEpisodeSheet() {
-        pendingPicker = false
         state = state.copy(episodeSheet = false, episodeLoading = false)
     }
 
-    /** 弹层里点某一集：关掉弹层直接播。 */
+    /** 选集里点「第 N 集」（官方集号）：关掉弹层，按这一集开播。 */
+    fun pickEpisodeNumber(number: Int) {
+        if (number <= 0) return
+        state = state.copy(episodeSheet = false, episodeLoading = false, episodeNumber = number)
+        val subject = state.detail ?: return
+        startPlayback(subject, number)
+    }
+
+    /** 弹层里点某一集源线路：关掉弹层直接播。 */
     fun pickEpisode(road: Road, index: Int) {
         state = state.copy(episodeSheet = false, episodeLoading = false)
         play(road, index)
@@ -1359,11 +1361,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 有一个源返回结果就尝试起播；多路并发时只允许一个 attempt 在飞。 */
     private fun maybeAutoPlay() {
-        // 选集弹层优先：只取线路，不切屏、不起播
-        if (pendingPicker) {
-            maybeFillPicker()
-            return
-        }
         if (!autoPlayArmed || attempting || state.playPhase != PlayPhase.Searching) return
         if (autoPlayJob?.isActive == true) return
         autoPlayJob = viewModelScope.launch {
@@ -1377,44 +1374,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 选集弹层：挑一个没试过的源去取线路（不起播）。 */
-    private fun maybeFillPicker() {
-        if (!pendingPicker || state.roads.isNotEmpty()) return
-        val next = candidates().firstOrNull { (rule, item) -> sourceKey(rule, item) !in triedSources }
-            ?: return
-        fillPicker(next.first, next.second)
-    }
-
-    private fun fillPicker(rule: AnimeRule, item: SearchItem) {
-        val key = sourceKey(rule, item)
-        triedSources += key
-        viewModelScope.launch {
-            val started = System.currentTimeMillis()
-            val result = withContext(Dispatchers.IO) { runCatching { engine.chapters(rule, item.src) } }
-            val elapsed = System.currentTimeMillis() - started
-            result.onSuccess { outcome ->
-                val roads = outcome.roads.filter { it.urls.isNotEmpty() }
-                if (roads.isEmpty()) {
-                    markStatus(key, SourceStatus(error = "没有可用线路", latencyMs = elapsed))
-                    maybeFillPicker()
-                    return@onSuccess
-                }
-                markStatus(key, SourceStatus(roads = roads, latencyMs = elapsed))
-                pendingPicker = false
-                state = state.copy(
-                    roads = roads,
-                    entryRuleName = rule.name,
-                    entrySrc = item.src,
-                    entryName = item.name,
-                    episodeLoading = false,
-                    episodeSheet = true,
-                )
-            }.onFailure { error ->
-                markStatus(key, SourceStatus(error = describe(error), latencyMs = elapsed))
-                maybeFillPicker()
-            }
-        }
-    }
     private fun attemptPlay(rule: AnimeRule, item: SearchItem) {        attempting = true
         val key = sourceKey(rule, item)
         triedSources += key
@@ -1593,10 +1552,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 官方进度：优先 eps（已播），没给就用总集数，都没有当未知（0）。 */
+    /** 官方进度：优先 eps（已播），没给就看 AniList 的下一集减一，最后才用总集数。 */
     private fun officialAired(): Int {
-        val eps = state.detailInfo?.eps ?: 0
-        if (eps > 0) return eps
+        val aired = AiringState.latestEpisode(state.detailInfo, state.airing?.episode ?: 0)
+        if (aired > 0) return aired
         return state.detailInfo?.totalEpisodes ?: 0
     }
 

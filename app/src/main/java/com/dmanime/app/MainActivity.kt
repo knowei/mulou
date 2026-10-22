@@ -929,7 +929,13 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
     }
 }
 
-/** 选集弹层：点某一集直接进播放页播这集。 */
+/**
+ * 选集弹层：格子是**官方集数** 1…总集数，还没播到的格子禁用。
+ *
+ * 以前这里铺的是片源线路的集数——片源排到 13 集就列 13 格，哪怕官方只播到 3 集；
+ * 而且片源集号一乱，点"第 5 集"会播到别的东西。现在一律以 Bangumi 为准，
+ * 点哪一集就按"官方第 N 集"去播，具体由播放页挑源、对齐集号。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EpisodeSheet(vm: AppViewModel, state: UiState) {
@@ -941,26 +947,24 @@ private fun EpisodeSheet(vm: AppViewModel, state: UiState) {
             ) {
                 Text("选集", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.weight(1f))
-                val count = state.roads.getOrNull(state.playRoadIndex)?.urls?.size ?: 0
                 Text(
-                    when {
-                        state.episodeLoading -> "正在找片源…"
-                        count > 0 -> "共 $count 集"
-                        else -> "暂无集数"
-                    },
+                    AiringState.summary(state.detailInfo).ifBlank { "正在取集数…" },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
-            val road = state.roads.getOrNull(state.playRoadIndex) ?: state.roads.firstOrNull()
-            if (state.episodeLoading || road == null || road.urls.isEmpty()) {
+            val info = state.detailInfo
+            val total = AiringState.totalEpisodes(info)
+            // aired 未知（0）时不设闸门：宁可让用户点进去看片源有没有，也不假装知道
+            val aired = AiringState.latestEpisode(info, state.airing?.episode ?: 0)
+            if (total <= 0) {
                 Box(Modifier.fillMaxWidth().height(140.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.height(10.dp))
                         Text(
-                            "正在准备集数…",
+                            "正在取集数…",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -969,25 +973,36 @@ private fun EpisodeSheet(vm: AppViewModel, state: UiState) {
             } else {
                 Spacer(Modifier.height(8.dp))
                 LazyColumn(Modifier.heightIn(max = 460.dp)) {
-                    items(road.urls.indices.toList().chunked(4)) { chunk ->
+                    items((1..total).toList().chunked(4)) { chunk ->
                         Row(
                             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            chunk.forEach { index ->
+                            chunk.forEach { number ->
+                                val open = aired <= 0 || number <= aired
                                 EpisodeChip(
-                                    text = road.names.getOrNull(index) ?: "${index + 1}",
-                                    current = road === state.roads.getOrNull(state.playRoadIndex) &&
-                                        index == state.playEpisodeIndex,
-                                    available = true,
+                                    text = "第%02d集".format(number),
+                                    current = state.screen == Screen.Player &&
+                                        state.episodeNumber == number,
+                                    available = open,
                                     sourceBehind = false,
-                                    onClick = { vm.pickEpisode(road, index) },
+                                    enabled = open,
+                                    onClick = { vm.pickEpisodeNumber(number) },
                                     modifier = Modifier.weight(1f),
                                 )
                             }
                             repeat(4 - chunk.size) { Spacer(Modifier.weight(1f)) }
                         }
                     }
+                }
+                if (aired in 1 until total) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "第 ${aired + 1} 集还没播出",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp),
+                    )
                 }
             }
         }
@@ -2374,6 +2389,7 @@ private fun EpisodeChip(
     current: Boolean,
     available: Boolean,
     sourceBehind: Boolean,
+    enabled: Boolean = true,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -2394,6 +2410,7 @@ private fun EpisodeChip(
 
     Surface(
         onClick = onClick,
+        enabled = enabled,
         shape = RoundedCornerShape(10.dp),
         color = container,
         border = BorderStroke(1.dp, border),

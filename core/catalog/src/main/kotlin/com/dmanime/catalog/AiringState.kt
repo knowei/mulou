@@ -34,6 +34,26 @@ object AiringState {
         return info.eps
     }
 
+    /**
+     * 已播到第几集（0 = 不知道）。
+     *
+     * 三个信号按可信度排：AniList 的「下一集」（`nextAiring`）只在这部番**还没播完**
+     * 时才有，它给出的「下一集 - 1」最可靠；其次是 Bangumi 的 `eps`（用户手动勾的，
+     * 常见整季都勾满，东京复仇者 三天战争篇才播到第 3 集，`eps` 已经是 13）；
+     * 最后是完结作品的 `total_episodes`。都没有就返回 0，界面上宁可不设闸门也不瞎猜。
+     */
+    fun latestEpisode(
+        info: SubjectDetail?,
+        nextAiring: Int = 0,
+        today: LocalDate = LocalDate.now(),
+    ): Int {
+        if (info == null) return 0
+        if (finished(info, today)) return totalEpisodes(info)
+        val guess = if (nextAiring > 1) nextAiring - 1 else 0
+        if (guess > 0) return if (info.eps in 1 until guess) info.eps else guess
+        return info.eps.coerceAtLeast(0)
+    }
+
     /** 选集按钮/信息卡上的那句集数说明。 */
     fun summary(
         info: SubjectDetail?,

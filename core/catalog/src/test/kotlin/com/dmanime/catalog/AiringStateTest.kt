@@ -61,6 +61,29 @@ class AiringStateTest {
         assertEquals("更新至 11 集 / 共 12 集", AiringState.summary(unknown, today = today))
     }
 
+    /**
+     * Bangumi 上没人勾 `eps` 时，用 AniList 的「下一集」反推已播集数：
+     * 东京复仇者 三天战争篇 下一集是第 4 集 → 已经播到第 3 集。
+     */
+    @Test
+    fun `next airing episode fills in the gap`() {
+        val ongoing = SubjectDetail(
+            id = 1,
+            name = "東京リベンジャーズ 三天戦争編",
+            airDate = "2026-10-02",
+            eps = 0,
+            totalEpisodes = 13,
+            platform = "TV",
+        )
+        val today = LocalDate.of(2026, 10, 22)
+        assertEquals(0, AiringState.latestEpisode(ongoing, today = today))
+        assertEquals(3, AiringState.latestEpisode(ongoing, nextAiring = 4, today = today))
+        // 整季都勾满了（eps=13）也不能越过「下一集是第 4 集」这个事实上限
+        assertEquals(3, AiringState.latestEpisode(ongoing.copy(eps = 13), nextAiring = 4, today = today))
+        // 完结作品仍然以总集数收口，不会被「下一集」带偏
+        assertEquals(12, AiringState.latestEpisode(mao, nextAiring = 99, today = LocalDate.of(2026, 12, 1)))
+    }
+
     @Test
     fun `missing detail does not invent numbers`() {
         assertEquals("", AiringState.summary(null))
