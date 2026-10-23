@@ -77,6 +77,11 @@ fun PlayerOverlay(
     danmakuOn: Boolean = false,
     /** 全屏时视频下面的设置区看不见，所以右上角要给一个进设置面板的入口 */
     onOpenDanmakuSettings: (() -> Unit)? = null,
+    /**
+     * 竖屏时视频下面就有「弹幕已开启 / 调整」那一行，右上角再挂一遍是重复的；
+     * 全屏才需要它。
+     */
+    showDanmakuChips: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -236,7 +241,7 @@ fun PlayerOverlay(
 
                 // 弹幕开关放在右上角：底部那行已经塞了进度条、集数控制、倍速和全屏，
                 // 再加一个按钮会把「全屏」挤出屏幕
-                if (onToggleDanmaku != null) {
+                if (onToggleDanmaku != null && showDanmakuChips) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
