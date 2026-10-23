@@ -1,4 +1,4 @@
-﻿import java.util.Properties
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -20,9 +20,9 @@ val localProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
-fun secret(key: String, env: String): String? =
+fun secret(key: String, vararg envs: String): String? =
     localProps.getProperty(key)?.takeIf { it.isNotBlank() }
-        ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+        ?: envs.firstNotNullOfOrNull { System.getenv(it)?.takeIf { v -> v.isNotBlank() } }
 
 val storePath = secret("komo.storeFile", "KOMO_STORE_FILE")
 val storePass = secret("komo.storePassword", "KOMO_STORE_PASSWORD")
@@ -44,10 +44,16 @@ android {
         // 弹弹play 开放平台凭证也不进仓库，本机 local.properties 里写：
         //   komo.dandanplay.appId=...
         //   komo.dandanplay.secret=...
-        // 或环境变量 KOMO_DANDANPLAY_APP_ID / KOMO_DANDANPLAY_SECRET。
+        // 或环境变量 KOMO_DANDANPLAY_APP_ID / KOMO_DANDANPLAY_SECRET
+        //（CI 上这两个 secret 叫 KOMO_DANDANPLAY_APP_ID / KOMO_DANDANPLAY_APP_SECRET，
+        // 两种拼法都认，省得改一处漏一处）。
         // 没配时弹幕界面里不会出现「弹弹play」这个来源。
         val ddpAppId = secret("komo.dandanplay.appId", "KOMO_DANDANPLAY_APP_ID") ?: ""
-        val ddpSecret = secret("komo.dandanplay.secret", "KOMO_DANDANPLAY_SECRET") ?: ""
+        val ddpSecret = secret(
+            "komo.dandanplay.secret",
+            "KOMO_DANDANPLAY_SECRET",
+            "KOMO_DANDANPLAY_APP_SECRET",
+        ) ?: ""
         buildConfigField("String", "DANDANPLAY_APP_ID", "\"$ddpAppId\"")
         buildConfigField("String", "DANDANPLAY_SECRET", "\"$ddpSecret\"")
     }
