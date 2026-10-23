@@ -787,9 +787,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         uiPrefs.edit().putString("theme", mode).apply()
         state = state.copy(themeMode = mode)
     }
-    /** 配色切换：blue（蓝白）/ green（护眼）。 */
+    /** 配色切换：blue（蓝白）/ green（护眼）/ dawn（晨光）。 */
     fun setPalette(palette: String) {
-        if (palette != "blue" && palette != "green") return
+        if (palette != "blue" && palette != "green" && palette != "dawn") return
         uiPrefs.edit().putString("theme_palette", palette).apply()
         state = state.copy(palette = palette)
     }

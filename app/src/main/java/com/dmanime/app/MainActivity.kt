@@ -49,6 +49,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Search
@@ -273,6 +275,77 @@ private val GreenDarkColors = darkColorScheme(
     error = Color(0xFFF2B8B5),
 )
 
+/**
+ * 晨光配色：按 UI 设计稿取色——米白底 (#FBFDF8)、灰绿主色 (#6D8B84)、
+ * 暖褐正文 (#4B343B)。和另外两套的区别是底色不是纯白，而是偏暖的米白，
+ * 正文也不用纯黑，用带一点褐的深色，整体柔和不刺眼。
+ */
+private val DawnLightColors = lightColorScheme(
+    primary = Color(0xFF6D8B84),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFDCE9E2),
+    onPrimaryContainer = Color(0xFF22362F),
+    secondary = Color(0xFF8FA9A1),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFE8F0E8),
+    onSecondaryContainer = Color(0xFF2A3C36),
+    tertiary = Color(0xFFA98467),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFF0E3D5),
+    onTertiaryContainer = Color(0xFF3B2A1C),
+    background = Color(0xFFFBFDF8),
+    onBackground = Color(0xFF3B3335),
+    surface = Color(0xFFFDFEFA),
+    onSurface = Color(0xFF3B3335),
+    surfaceVariant = Color(0xFFE8EFE6),
+    onSurfaceVariant = Color(0xFF5A6459),
+    surfaceTint = Color(0xFF6D8B84),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF7FAF4),
+    surfaceContainer = Color(0xFFF2F6F0),
+    surfaceContainerHigh = Color(0xFFEDF2EA),
+    surfaceContainerHighest = Color(0xFFE7EDE5),
+    inverseSurface = Color(0xFF2F3A35),
+    inverseOnSurface = Color(0xFFF1F5EF),
+    inversePrimary = Color(0xFFA7C6BC),
+    outline = Color(0xFFA9B7AA),
+    outlineVariant = Color(0xFFCDD8CB),
+    error = Color(0xFFA93B2E),
+)
+
+private val DawnDarkColors = darkColorScheme(
+    primary = Color(0xFFA7C6BC),
+    onPrimary = Color(0xFF16302A),
+    primaryContainer = Color(0xFF2C453E),
+    onPrimaryContainer = Color(0xFFCBE2D9),
+    secondary = Color(0xFF8FAFA4),
+    onSecondary = Color(0xFF14251F),
+    secondaryContainer = Color(0xFF33473F),
+    onSecondaryContainer = Color(0xFFC9DED4),
+    tertiary = Color(0xFFC6A98A),
+    onTertiary = Color(0xFF2F2418),
+    tertiaryContainer = Color(0xFF45372A),
+    onTertiaryContainer = Color(0xFFE8D8C6),
+    background = Color(0xFF101614),
+    onBackground = Color(0xFFE3EAE4),
+    surface = Color(0xFF151C19),
+    onSurface = Color(0xFFE3EAE4),
+    surfaceVariant = Color(0xFF26302B),
+    onSurfaceVariant = Color(0xFFB4C2B8),
+    surfaceTint = Color(0xFFA7C6BC),
+    surfaceContainerLowest = Color(0xFF0A0F0D),
+    surfaceContainerLow = Color(0xFF141B18),
+    surfaceContainer = Color(0xFF19211D),
+    surfaceContainerHigh = Color(0xFF1E2723),
+    surfaceContainerHighest = Color(0xFF232D28),
+    inverseSurface = Color(0xFFE3EAE4),
+    inverseOnSurface = Color(0xFF1C2420),
+    inversePrimary = Color(0xFF3F5F55),
+    outline = Color(0xFF6E7D73),
+    outlineVariant = Color(0xFF3E4A43),
+    error = Color(0xFFFFB4A9),
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -308,6 +381,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(
                 colorScheme = when (vm.state.palette) {
                     "green" -> if (darkTheme) GreenDarkColors else GreenLightColors
+                    "dawn" -> if (darkTheme) DawnDarkColors else DawnLightColors
                     else -> if (darkTheme) BlueDarkColors else BlueLightColors
                 },
             ) {
@@ -938,6 +1012,7 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
     val subject = state.detail ?: return
     val info = state.detailInfo
     var expanded by remember(subject.id) { mutableStateOf(false) }
+    var showMore by remember(subject.id) { mutableStateOf(false) }
     val watched = state.watches.any { it.subjectId == subject.id }
     val fromPlayer = state.detailOrigin == Screen.Player
     val summary = info?.summary?.takeIf { it.isNotBlank() } ?: subject.summary
@@ -1056,18 +1131,72 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
             }
         }
 
-        // 角色 / 声优
-        if (state.characters.isNotEmpty()) {
-            item {
-                Text(
-                    "角色 / 声优",
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 6.dp),
-                )
+        // 选集入口：点开弹出集数面板（后台先找源，找到直接铺集数）
+        // 放在主操作正下方——它比角色横条、标签更常用，之前得先滑一屏才看到。
+        if (!fromPlayer) item {
+            val summaryText = AiringState.summary(info)
+            OutlinedButton(
+                onClick = vm::openEpisodeSheet,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            ) {
+                Text(if (summaryText.isEmpty()) "选集" else "选集 · $summaryText")
             }
+        }
+
+        if (summary.isNotBlank()) {
+            item {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = if (expanded) Int.MAX_VALUE else 4,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (summary.length > 90) {
+                        TextButton(
+                            onClick = { expanded = !expanded },
+                            contentPadding = PaddingValues(0.dp),
+                        ) { Text(if (expanded) "收起" else "展开简介") }
+                    }
+                }
+            }
+        }
+
+        // 角色 / 声优 / 标签：都属于"想看的才看"，默认收起，首屏才有留白。
+        val hasMore = state.characters.isNotEmpty() || !info?.tags.isNullOrEmpty()
+        if (hasMore) {
+            item {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { showMore = !showMore }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "角色 / 标签",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (showMore) "收起" else "展开",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Icon(
+                        if (showMore) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
+            }
+        }
+
+        if (showMore && state.characters.isNotEmpty()) {
             item {
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(state.characters.take(24), key = { it.id }) { character ->
@@ -1116,18 +1245,7 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
             }
         }
 
-        // 选集入口：点开弹出集数面板（后台先找源，找到直接铺集数）
-        if (!fromPlayer) item {
-            val summaryText = AiringState.summary(info)
-            OutlinedButton(
-                onClick = vm::openEpisodeSheet,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            ) {
-                Text(if (summaryText.isEmpty()) "选集" else "选集 · $summaryText")
-            }
-        }
-
-        if (!info?.tags.isNullOrEmpty()) {
+        if (showMore && !info?.tags.isNullOrEmpty()) {
             item {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -1135,25 +1253,6 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
                 ) {
                     items(info.tags.take(12), key = { it.name }) { tag ->
                         AssistChip(onClick = {}, label = { Text(tag.name) })
-                    }
-                }
-            }
-        }
-
-        if (summary.isNotBlank()) {
-            item {
-                Column(Modifier.padding(horizontal = 16.dp)) {
-                    Text(
-                        summary,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = if (expanded) Int.MAX_VALUE else 4,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (summary.length > 90) {
-                        TextButton(
-                            onClick = { expanded = !expanded },
-                            contentPadding = PaddingValues(0.dp),
-                        ) { Text(if (expanded) "收起" else "展开简介") }
                     }
                 }
             }
@@ -2881,6 +2980,7 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                         listOf(
                             "blue" to "蓝白",
                             "green" to "护眼",
+                            "dawn" to "晨光",
                         ).forEach { (palette, label) ->
                             FilterChip(
                                 selected = state.palette == palette,
