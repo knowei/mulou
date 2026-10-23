@@ -9,20 +9,25 @@ Android 追番客户端。**索引 → 详情 → 播放**，带 B 站弹幕、�
 
 <p align="center">
   <img src="docs/screenshots/home.jpg" width="23%" alt="追番首页" />
+  <img src="docs/screenshots/search.jpg" width="23%" alt="搜索" />
   <img src="docs/screenshots/detail.jpg" width="23%" alt="详情页" />
   <img src="docs/screenshots/player-danmaku.jpg" width="23%" alt="播放与弹幕" />
-  <img src="docs/screenshots/downloads.jpg" width="23%" alt="离线下载" />
 </p>
 <p align="center">
-  <img src="docs/screenshots/danmaku-settings.jpg" width="23%" alt="弹幕设置" />
+  <img src="docs/screenshots/index.jpg" width="23%" alt="分类索引" />
+  <img src="docs/screenshots/daycal.jpg" width="23%" alt="更新表" />
+  <img src="docs/screenshots/season.jpg" width="23%" alt="季度番剧表" />
+  <img src="docs/screenshots/downloads.jpg" width="23%" alt="离线下载" />
 </p>
 
 ## 功能
 
 **发现**
 
-- 追番首页：继续观看（带进度条）、今日更新、本季新番
+- 追番首页：继续观看（带进度条和「源到第 N 集 / 源未更新 / 已看完」状态）、今日更新、本季新番
 - 季度番剧表：按「2026 秋」这样的季度浏览整季全量，滚到底自动翻页
+- 更新表：按天看当天更新，`◀ ▶` 前后翻（前天 / 昨天 / 今天 / 明天 / 后天）
+- 分类索引：地区（日漫 / 国漫 / 韩漫 / 美漫）× 题材标签，可按热度、评分、排名排序，无限翻页
 - 搜索：本地索引 + Bangumi 在线搜索，带历史记录
 
 **详情**
@@ -37,6 +42,8 @@ Android 追番客户端。**索引 → 详情 → 播放**，带 B 站弹幕、�
 - 手势：单击显隐控制条、双击播放暂停、左右拖进度、右侧上下拖音量、左侧上下拖亮度
 - 0.75×–2× 倍速、全屏、选集、自动连播、记忆上次的源与进度
 - 源面板：可用源 / 失败源分组，失败原因就地显示；403 挑战走 WebView 过一次人机验证
+- 播放页「详情 / 评论」两个子页：评论是按当前这一集取的（B 站剧集短评，热评优先，滚动加载）
+- 平板与横屏：底部导航换成左侧竖栏，网格按宽度自适应列数，播放页改成「左画面 / 右信息」两栏
 
 **集数与门禁（防播错集）**
 
@@ -58,7 +65,8 @@ Android 追番客户端。**索引 → 详情 → 播放**，带 B 站弹幕、�
 
 **弹幕**
 
-- 数据来自哔哩哔哩公开接口（不需要登录、不需要大会员）
+- 三个来源：B 站番剧库（官方集）、B 站用户投稿、弹弹play（需自备 AppId/AppSecret）
+- 来源可多选：勾几个就合并几个，按时间排序去重；某个源没取到会在卡片上写明原因
 - 按剧名 + 季数标记严格匹配，宁可没有也不挂错季
 - 外观可调：透明度、字号、显示区域、速度，以及 ±秒级时间轴对齐（各家片源片头长短不一）
 - 按播放位置逐帧绘制，不经过 ViewModel，不引起整页重组
@@ -129,7 +137,7 @@ release 正文由 CI 用 `git log <上一个 tag>..<本 tag>` 生成——App �
 ```bash
 # 1. app/build.gradle.kts 里 versionCode +1、versionName 改成新版本号
 # 2. 提交后打个同名 tag，CI 出包 + 建 release
-git tag v1.1 && git push origin v1.1
+git tag v1.2 && git push origin v1.2
 ```
 
 已装旧版的用户在下次冷启动（或「我的 → 关于 → 检查更新」）时会看到升级提示。
@@ -159,8 +167,11 @@ git tag v1.1 && git push origin v1.1
 
 ### 弹幕
 
-不需要账号。播放时按「番剧原名 / 中文名」检索 B 站番剧库，拿到对应集数后拉弹幕。
+不需要登录，也不需要大会员。播放时按「番剧原名 / 中文名」检索 B 站番剧库，拿到对应集数后拉弹幕；
+番剧库没有的番会再试用户投稿（按分 P 数和时长对集），配了弹弹play 凭证的话它是第三个来源。
 匹配不上就什么都不显示，不会拿别的季糊弄。
+
+来源可多选：只勾一个就只看那一个源，勾多个就按时间合并。
 
 调试期间可以用播放页「重新匹配」手动触发；片头对不上时用「时间轴」把弹幕整体前后挪。
 
@@ -191,7 +202,8 @@ git tag v1.1 && git push origin v1.1
 ## 已知限制
 
 - 只在 MuMu 12（Android 12L / API 32）和一台真机上验证过，未覆盖低端设备与全部 ROM
-- 弹幕只有 B 站一个源，B 站没买的番（部分国漫、欧美动画）没有弹幕
+- 弹幕依赖 B 站与弹弹play：B 站没买的番（部分国漫、欧美动画）没有弹幕，弹弹play 需要自己申请凭证
+- 分类索引受 Bangumi 接口限制：单次筛选最多翻到 1000 条，老番地区标签常有缺失
 - 冷门番、冷门源搜不到时只能换源，应用不做站点推荐
 - WebView 嗅探在部分 ROM 上会被节流；MSE（blob）页面目前只识别并提示
 - 下载存在应用私有目录，卸载应用会一起删掉
@@ -202,7 +214,8 @@ git tag v1.1 && git push origin v1.1
 |---|---|
 | 番剧索引、详情、季度表、角色声优 | [Bangumi 番组计划](https://bgm.tv) 公开 API |
 | 下一集播出时间 | [AniList](https://anilist.co) GraphQL |
-| 弹幕 | 哔哩哔哩公开弹幕接口（未登录、只读） |
+| 弹幕 | 哔哩哔哩公开弹幕接口（未登录、只读）、[弹弹play](https://www.dandanplay.com) 开放平台（需自备凭证） |
+| 评论 | 哔哩哔哩剧集短评接口（未登录、只读） |
 | 播放地址 | 用户导入规则所指向的第三方站点 |
 
 本项目与上述服务均无隶属关系，也不代理、转存、再分发它们的任何内容。
