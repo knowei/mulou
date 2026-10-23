@@ -142,6 +142,7 @@ import com.dmanime.danmaku.DanmakuOrigin
 import com.dmanime.rules.model.AnimeRule
 import com.dmanime.rules.model.SearchItem
 import com.dmanime.catalog.today
+import com.dmanime.catalog.TitleVersion
 import kotlinx.coroutines.delay
 import java.io.File
 import java.time.LocalDate
@@ -1375,8 +1376,30 @@ private fun EpisodeSheet(vm: AppViewModel, state: UiState) {
 
 // ------------------------------------------------------------------ 搜索
 
+/**
+ * 版本标记（第几季 / 剧场版 / OVA）的识别放在 core/catalog 的 [TitleVersion] 里，
+ * 这样能写单测，源面板和详情页也能共用同一套判断。
+ */
+private fun seasonLabel(title: String): String? = TitleVersion.seasonLabel(title)
+
+/** 版本小标签：只给版本信息，不加装饰。 */
 @Composable
-private fun SearchScreen(vm: AppViewModel, state: UiState) {    var keyword by remember { mutableStateOf(state.keyword) }
+private fun SeasonBadge(label: String) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.primary,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
+}
+
+@Composable
+private fun SearchScreen(vm: AppViewModel, state: UiState) {
+    var keyword by remember { mutableStateOf(state.keyword) }
     val all = state.home.days.flatMap { it.items }.distinctBy { it.id }
     val matches = remember(keyword, all) {
         if (keyword.isBlank()) {
@@ -1547,12 +1570,19 @@ private fun SearchScreen(vm: AppViewModel, state: UiState) {    var keyword by r
                         }
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(
-                                subject.displayTitle,
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Row {
+                                seasonLabel(subject.displayTitle)?.let { label ->
+                                    SeasonBadge(label)
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                Text(
+                                    subject.displayTitle,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                             Text(
                                 buildString {
                                     if (subject.rating.score > 0) append("%.1f 分".format(subject.rating.score))
@@ -1622,12 +1652,19 @@ private fun SearchScreen(vm: AppViewModel, state: UiState) {    var keyword by r
                             }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(
-                                    result.displayTitle,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Row {
+                                    seasonLabel(result.displayTitle)?.let { label ->
+                                        SeasonBadge(label)
+                                        Spacer(Modifier.width(6.dp))
+                                    }
+                                    Text(
+                                        result.displayTitle,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
                                 Text(
                                     buildString {
                                         if (result.rating.score > 0) append("%.1f 分".format(result.rating.score))
@@ -1731,7 +1768,20 @@ private fun SearchScreen(vm: AppViewModel, state: UiState) {    var keyword by r
                             key = { index, _ -> "${hit.ruleName}-$index" },
                         ) { _, item ->
                             ListItem(
-                                headlineContent = { Text(item.name) },
+                                headlineContent = {
+                                    Row {
+                                        seasonLabel(item.name)?.let { label ->
+                                            SeasonBadge(label)
+                                            Spacer(Modifier.width(6.dp))
+                                        }
+                                        Text(
+                                            item.name,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                },
                                 supportingContent = {
                                     Text(item.src, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 },
