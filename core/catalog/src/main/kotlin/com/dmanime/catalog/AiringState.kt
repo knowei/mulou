@@ -2,6 +2,7 @@ package com.dmanime.catalog
 
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
+import java.time.temporal.ChronoUnit
 
 /**
  * 「这集播了没有」的判断，不只看 Bangumi 的 `eps`。
@@ -30,17 +31,37 @@ object AiringState {
         if (info == null) return 0
         val total = totalEpisodes(info)
         if (finished(info, today)) return total
-        if (total > 0) return info.eps.coerceIn(0, total)
-        return info.eps
+        val byDate = airedByDate(info, today)
+        // 有首播日就先信日期：Bangumi 的 `eps` 常常是"计划集数"而不是"已播集数"，
+        // 「乱世千金…」25 集的片子 10-06 才开播，`eps` 已经写满 25，选集里全亮着。
+        val base = if (byDate > 0) byDate else info.eps
+        return if (total > 0) base.coerceIn(0, total) else base
+    }
+
+    /**
+     * 按首播日推算已播集数（0 = 推不出来）。
+     *
+     * 只认「首播日 + 每周一集」这一种最常见的排期；首播日缺失、总集数未知、
+     * 或者平台不是 TV/剧场版（OVA、网络放送多是攒着一次上）都不猜。
+     */
+    private fun airedByDate(info: SubjectDetail, today: LocalDate): Int {
+        if (totalEpisodes(info) <= 0) return 0
+        val start = parseDate(info.effectiveAirDate) ?: return 0
+        if (totalEpisodes(info) == 1 || info.platform == "剧场版") {
+            return if (today.isBefore(start)) 0 else 1
+        }
+        if (info.platform.isNotEmpty() && info.platform != "TV") return 0
+        if (today.isBefore(start)) return 0
+        return (ChronoUnit.WEEKS.between(start, today) + 1).toInt().coerceAtLeast(1)
     }
 
     /**
      * 已播到第几集（0 = 不知道）。
      *
      * 三个信号按可信度排：AniList 的「下一集」（`nextAiring`）只在这部番**还没播完**
-     * 时才有，它给出的「下一集 - 1」最可靠；其次是 Bangumi 的 `eps`（用户手动勾的，
-     * 常见整季都勾满，东京复仇者 三天战争篇才播到第 3 集，`eps` 已经是 13）；
-     * 最后是完结作品的 `total_episodes`。都没有就返回 0，界面上宁可不设闸门也不瞎猜。
+     * 时才有，它给出的「下一集 - 1」最可靠；其次是首播日推出来的周数（[airedCount]）；
+     * 最后才是 Bangumi 的 `eps`（用户手动勾的，常见整季都勾满，东京复仇者 三天战争篇
+     * 才播到第 3 集，`eps` 已经是 13）。都没有就返回 0，界面上宁可不设闸门也不瞎猜。
      */
     fun latestEpisode(
         info: SubjectDetail?,
@@ -50,8 +71,11 @@ object AiringState {
         if (info == null) return 0
         if (finished(info, today)) return totalEpisodes(info)
         val guess = if (nextAiring > 1) nextAiring - 1 else 0
-        if (guess > 0) return if (info.eps in 1 until guess) info.eps else guess
-        return info.eps.coerceAtLeast(0)
+        val byDate = airedCount(info, today)
+        // 两个都有就取小的：哪个说"还没播"就按还没播算，别把没播的集放出来
+        if (guess > 0 && byDate > 0) return minOf(guess, byDate)
+        if (guess > 0) return guess
+        return byDate.coerceAtLeast(0)
     }
 
     /** 选集按钮/信息卡上的那句集数说明。 */
