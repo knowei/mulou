@@ -63,8 +63,8 @@ import java.net.URL
 
 enum class Screen { Home, Search, Mine, Downloads, Detail, Chapters, Player, Verify, Health, Season, Index, DayCalendar }
 
-/** 「更新表」能往前/往后翻几天。日历一次给一周，所以这个范围内都能立刻切。 */
-private const val DAY_MAX_OFFSET = 2
+/** 「更新表」能选的范围。日历一次给一周，所以这个范围内都能立刻切。 */
+private const val DAY_MAX_OFFSET = 6
 
 /** 一个源的体检结果。status: ok / empty / error */
 data class SourceHealth(
@@ -141,6 +141,7 @@ data class UiState(
     val title: String = "",
     val playPageUrl: String = "",
     val playMedia: PlayMedia? = null,
+    val playbackRevision: Int = 0,
     val logs: List<String> = emptyList(),
     val error: String? = null,
     val home: HomeState = HomeState(),
@@ -186,6 +187,8 @@ data class UiState(
     /** 下一集什么时候播（AniList）。没用/匹配不上时为 null。 */
     val airing: AiringInfo? = null,
     val characters: List<SubjectCharacter> = emptyList(),
+    /** 播完自动下一集。默认开；关掉就不会在片尾突然切走。 */
+    val autoNext: Boolean = true,
     // ---------- 弹幕 ----------
     val danmakuOn: Boolean = true,
     val danmakuAlpha: Float = 0.92f,
@@ -344,6 +347,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 所有候选源都缺这一集时，记下最接近的缺口用于提示。 */
     private var gateCandidate: EpisodeGate? = null
     private val triedSources = mutableSetOf<String>()
+    private var recoveryResume: Triple<Int, Int, Long>? = null
 
     /** 下载进度变化时把队列刷进界面状态。 */
     private val downloadListener = object : androidx.media3.exoplayer.offline.DownloadManager.Listener {
@@ -381,6 +385,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             imageBase = catalog.imageBase,
             themeMode = uiPrefs.getString("theme", "light") ?: "light",
             palette = uiPrefs.getString("theme_palette", "blue") ?: "blue",
+            autoNext = uiPrefs.getBoolean("auto_next", true),
             danmakuOn = uiPrefs.getBoolean("danmaku_on", true),
             danmakuAlpha = uiPrefs.getFloat("danmaku_alpha", 0.92f),
             danmakuScale = uiPrefs.getFloat("danmaku_scale", 1f),
@@ -647,6 +652,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         state = state.copy(dayOffset = (state.dayOffset + delta).coerceIn(-DAY_MAX_OFFSET, DAY_MAX_OFFSET))
     }
 
+    /** 点上面那排日历格子，直接跳到那一天。 */
+    fun setDayOffset(value: Int) {
+        state = state.copy(dayOffset = value.coerceIn(-DAY_MAX_OFFSET, DAY_MAX_OFFSET))
+    }
+
     /** ◀ ▶ 切季度。 */
     fun shiftSeason(delta: Int) {
         var y = state.seasonYear
@@ -787,9 +797,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         uiPrefs.edit().putString("theme", mode).apply()
         state = state.copy(themeMode = mode)
     }
-    /** 配色切换：blue（蓝白）/ green（护眼）。 */
+    /** 配色切换：blue（蓝白）/ green（护眼）/ dawn（晨光）。 */
     fun setPalette(palette: String) {
-        if (palette != "blue" && palette != "green") return
+        if (palette != "blue" && palette != "green" && palette != "dawn") return
         uiPrefs.edit().putString("theme_palette", palette).apply()
         state = state.copy(palette = palette)
     }
@@ -1044,6 +1054,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 首页「继续观看」：恢复线路后直接跳到上次的集数与进度。 */
     fun resumeWatch(entry: WatchEntry) {
+        recoveryResume = null
         // 只有"追了但还没看过"的条目，进详情页而不是报错
         if (!entry.hasProgress) {
             openSubject(
@@ -1187,6 +1198,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 用户不需要在搜索页挑源——源的选择被推迟到"播不动"的时候。
      */
     fun startPlayback(subject: CatalogSubject, episode: Int = 1) {
+        recoveryResume = null
         rememberKeyword(subject.displayTitle)
         autoPlayArmed = true
         attempting = false
@@ -1740,7 +1752,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 播放器报错（CDN 连不上、编码不支持等）→ 自动换下一个源。 */
-    fun onPlaybackError(message: String) {
+    fun onPlaybackError(message: String, positionMs: Long? = null) {
+        if (positionMs != null) {
+            recoveryResume = Triple(state.playSubjectId, state.episodeNumber, positionMs.coerceAtLeast(0))
+        }
         appendLog("播放出错：$message")
         // 记到源状态里，面板上会显示成 ✗ + 原因
         if (state.entryRuleName.isNotEmpty()) {
@@ -1766,6 +1781,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (positionMs > 0 && state.playMedia != null) {
             state = state.copy(playStartMs = positionMs)
         }
+    }
+
+    /** Revisit the page to obtain a fresh signed URL and cookies, retaining playback position. */
+    fun refreshPlaybackAddress(positionMs: Long) {
+        if (state.playPageUrl.isBlank()) {
+            onPlaybackError("无法重新获取播放地址", positionMs)
+            return
+        }
+        state = state.copy(
+            playMedia = null,
+            playStartMs = positionMs.coerceAtLeast(0),
+            playbackRevision = state.playbackRevision + 1,
+            playPhase = PlayPhase.Starting,
+        )
+        probeEmbeddedMedia(state.playPageUrl)
     }
     fun openDetailFromPlayer() {
         val subject = state.detail ?: return
@@ -2093,6 +2123,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         state = state.copy(episodeGate = null)
         val url = road.urls.getOrNull(index) ?: return
         val episode = road.names.getOrNull(index) ?: "第${index + 1}集"
+        val targetEpisode = parseEpisodeNo(episode)?.toInt() ?: (index + 1)
+        val recoveryPosition = recoveryResume?.takeIf {
+            it.first == state.playSubjectId && it.second == targetEpisode
+        }?.third
+        recoveryResume = null
         state = state.copy(
             screen = Screen.Player,
             title = "${state.title.substringBefore(" · ")} · $episode",
@@ -2100,7 +2135,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             playMedia = null,
             playRoadIndex = state.roads.indexOf(road).coerceAtLeast(0),
             playEpisodeIndex = index,
-            playStartMs = resumePositionFor(index),
+            playStartMs = recoveryPosition ?: resumePositionFor(index),
             // 半集（第5.5集）按 5 算：「第 N 集」这套整数语义里没有 5.5 的位置，
             // 但标题上仍显示片源原文，用户看得出这是特别篇
             episodeNumber = parseEpisodeNo(episode)?.toInt() ?: (index + 1),
@@ -2135,13 +2170,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun probeEmbeddedMedia(pageUrl: String) {
         if (!pageUrl.startsWith("http", ignoreCase = true)) return
+        val revision = state.playbackRevision
         viewModelScope.launch {
             val media = withContext(Dispatchers.IO) {
                 val html = engine.fetchPage(pageUrl, referer = pageUrl) ?: return@withContext null
                 MacCmsPlayer.embeddedMediaUrl(html, pageUrl)
             } ?: return@launch
             // 用户可能已经换集/换源，别把上一集的地址塞进来
-            if (state.playPageUrl != pageUrl || state.playMedia != null) return@launch
+            if (state.playPageUrl != pageUrl || state.playbackRevision != revision || state.playMedia != null) return@launch
             appendLog("播放页内嵌地址: $media")
             onSniffCandidate(media)
         }
@@ -2575,6 +2611,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun setAutoNext(on: Boolean) {
+        uiPrefs.edit().putBoolean("auto_next", on).apply()
+        state = state.copy(autoNext = on)
+    }
+
     fun toggleDanmaku() {
         val next = !state.danmakuOn
         uiPrefs.edit().putBoolean("danmaku_on", next).apply()
@@ -2670,7 +2711,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         .resolve(candidate, referer = referer, userAgent = DEFAULT_UA)
                 }.getOrNull()
             }
-            if (media != null && state.playMedia == null) {
+            if (media != null && state.playMedia == null && state.playPageUrl == current.playPageUrl &&
+                state.playbackRevision == current.playbackRevision && state.entrySrc == current.entrySrc) {
                 state = state.copy(
                     playMedia = PlayMedia(
                         url = media.url,

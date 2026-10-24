@@ -62,8 +62,8 @@ class AiringStateTest {
     }
 
     /**
-     * Bangumi 上没人勾 `eps` 时，用 AniList 的「下一集」反推已播集数：
-     * 东京复仇者 三天战争篇 下一集是第 4 集 → 已经播到第 3 集。
+     * Bangumi 上没人勾 `eps` 时，靠首播日数周数就能算出已播集数：
+     * 东京复仇者 三天战争篇 10-02 首播，10-22 已经播到第 3 集。
      */
     @Test
     fun `next airing episode fills in the gap`() {
@@ -76,7 +76,8 @@ class AiringStateTest {
             platform = "TV",
         )
         val today = LocalDate.of(2026, 10, 22)
-        assertEquals(0, AiringState.latestEpisode(ongoing, today = today))
+        assertEquals(3, AiringState.airedCount(ongoing, today))
+        assertEquals(3, AiringState.latestEpisode(ongoing, today = today))
         assertEquals(3, AiringState.latestEpisode(ongoing, nextAiring = 4, today = today))
         // 整季都勾满了（eps=13）也不能越过「下一集是第 4 集」这个事实上限
         assertEquals(3, AiringState.latestEpisode(ongoing.copy(eps = 13), nextAiring = 4, today = today))
@@ -89,6 +90,40 @@ class AiringStateTest {
         assertEquals("", AiringState.summary(null))
         assertEquals("12 集", AiringState.summary(null, sourceEpisodes = 12))
         assertEquals(0, AiringState.airedCount(null))
+    }
+
+    /**
+     * 复现用户报的问题：「乱世千金」共 25 集、10-06 才开播，Bangumi 的 `eps` 却已经
+     * 写满 25，于是详情页选集里第 4~25 集全亮着可点，点进去必然是"源还没更新"。
+     */
+    @Test
+    fun `planned episode count is not mistaken for aired count`() {
+        val fresh = SubjectDetail(
+            id = 2,
+            name = "乱世千金ニヴァ・リストン",
+            airDate = "2026-10-06",
+            eps = 25,
+            totalEpisodes = 25,
+            platform = "TV",
+        )
+        val today = LocalDate.of(2026, 10, 24)
+        assertFalse(AiringState.finished(fresh, today))
+        assertEquals(3, AiringState.airedCount(fresh, today))
+        assertEquals(3, AiringState.latestEpisode(fresh, today = today))
+        assertEquals("更新至 3 集 / 共 25 集", AiringState.summary(fresh, today = today))
+    }
+
+    /** 网络放送、OVA 这类多是攒着一次上，不按每周一集去猜。 */
+    @Test
+    fun `irregular platforms do not use the weekly math`() {
+        val web = SubjectDetail(
+            id = 3,
+            airDate = "2026-10-06",
+            eps = 6,
+            totalEpisodes = 12,
+            platform = "WEB",
+        )
+        assertEquals(6, AiringState.airedCount(web, LocalDate.of(2026, 10, 24)))
     }
 
     /**

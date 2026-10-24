@@ -8,9 +8,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -77,6 +78,11 @@ fun PlayerOverlay(
     danmakuOn: Boolean = false,
     /** 全屏时视频下面的设置区看不见，所以右上角要给一个进设置面板的入口 */
     onOpenDanmakuSettings: (() -> Unit)? = null,
+    /**
+     * 竖屏时视频下面就有「弹幕已开启 / 调整」那一行，右上角再挂一遍是重复的；
+     * 全屏才需要它。
+     */
+    showDanmakuChips: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -94,6 +100,8 @@ fun PlayerOverlay(
     var speed by remember { mutableFloatStateOf(1f) }
     var hud by remember { mutableStateOf<String?>(null) }
     var speedMenuOpen by remember { mutableStateOf(false) }
+    // 全屏锁屏：躺着看的时候手一蹭就跳进度、一碰就暂停，锁上只剩一个「解锁」按钮
+    var locked by remember(fullscreen) { mutableStateOf(false) }
 
     LaunchedEffect(player) {
         while (true) {
@@ -105,8 +113,9 @@ fun PlayerOverlay(
         }
     }
 
-    LaunchedEffect(showControls, isPlaying) {
-        if (showControls && isPlaying) {
+    LaunchedEffect(showControls, isPlaying, locked) {
+        // 锁屏时「解锁」按钮只短暂露一下，3 秒后自动收起
+        if (showControls && (locked || isPlaying)) {
             delay(3_000)
             showControls = false
         }
@@ -122,82 +131,115 @@ fun PlayerOverlay(
     Box(
         modifier
             .fillMaxSize()
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { showControls = !showControls },
-                    onDoubleTap = {
-                        if (player.isPlaying) player.pause() else player.play()
-                        showControls = true
-                    },
-                )
-            }
-            .pointerInput(Unit) {
-                var mode = 0 // 0 未定 1 进度 2 音量 3 亮度
-                var startX = 0f
-                var startY = 0f
-                var seekBase = 0L
-                var brightnessBase = 1f
+            .pointerInput(locked) {
+                var lastTapMs = 0L
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val downMs = System.currentTimeMillis()
+                    val startX = down.position.x
+                    val startY = down.position.y
+                    val seekBase = player.currentPosition
+                    val brightBase =
+                        activity?.window?.attributes?.screenBrightness?.takeIf { it >= 0f } ?: 0.5f
+                    var mode = 0 // 0 未定 1 进度 2 音量 3 亮度
+                    var pastSlop = false
+                    var childHandled = false
 
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        startX = offset.x
-                        startY = offset.y
-                        seekBase = player.currentPosition
-                        brightnessBase = activity?.window?.attributes?.screenBrightness?.takeIf { it >= 0f } ?: 0.5f
-                        mode = 0
-                    },
-                    onDrag = { change, _ ->
-                        change.consume()
-                        val dx = change.position.x - startX
-                        val dy = change.position.y - startY
-                        if (mode == 0) {
-                            mode = when {
-                                abs(dx) > abs(dy) -> 1
-                                startX < size.width / 2f -> 3
-                                else -> 2
-                            }
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        // 按在按钮 / 进度条上的按压交给它们自己处理，别在这里再当成轻点
+                        if (change.isConsumed) {
+                            childHandled = true
+                            break
                         }
-                        when (mode) {
-                            1 -> {
-                                val deltaMs = (dx / size.width) * 120_000f
-                                dragValue = (seekBase + deltaMs).coerceIn(0f, duration.coerceAtLeast(1L).toFloat())
-                                dragging = true
-                                hud = "${formatClock(dragValue.toLong())} / ${formatClock(duration)}"
-                            }
-
-                            2 -> {
-                                val delta = ((startY - change.position.y) / size.height) * maxVolume
-                                val target = (audio?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0) + delta.toInt()
-                                val clamped = target.coerceIn(0, maxVolume)
-                                audio?.setStreamVolume(AudioManager.STREAM_MUSIC, clamped, 0)
-                                hud = "音量 ${clamped * 100 / maxVolume}%"
-                            }
-
-                            else -> {
-                                val delta = (startY - change.position.y) / size.height
-                                val target = (brightnessBase + delta).coerceIn(0.05f, 1f)
-                                activity?.window?.let { window ->
-                                    window.attributes = window.attributes.apply { screenBrightness = target }
+                        if (!pastSlop && !locked) {
+                            val dx = change.position.x - startX
+                            val dy = change.position.y - startY
+                            if (abs(dx) > viewConfiguration.touchSlop ||
+                                abs(dy) > viewConfiguration.touchSlop
+                            ) {
+                                pastSlop = true
+                                mode = when {
+                                    abs(dx) > abs(dy) -> 1
+                                    startX < size.width / 2f -> 3
+                                    else -> 2
                                 }
-                                hud = "亮度 ${(target * 100).toInt()}%"
                             }
                         }
-                    },
-                    onDragEnd = {
-                        if (mode == 1 && dragging) {
-                            player.seekTo(dragValue.toLong())
-                            position = dragValue.toLong()
-                            dragging = false
+                        if (pastSlop) {
+                            change.consume()
+                            val dx = change.position.x - startX
+                            val dy = startY - change.position.y
+                            when (mode) {
+                                1 -> {
+                                    // 左右拖直接改进度：不叫出控制条，只浮一个时间提示；
+                                    // 手指松开才真正 seek
+                                    val deltaMs = (dx / size.width) * 120_000f
+                                    dragValue = (seekBase + deltaMs)
+                                        .coerceIn(0f, duration.coerceAtLeast(1L).toFloat())
+                                    dragging = true
+                                    hud = "${formatClock(dragValue.toLong())} / ${formatClock(duration)}"
+                                }
+
+                                2 -> {
+                                    val delta = (dy / size.height) * maxVolume
+                                    val target = (audio?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0) +
+                                        delta.toInt()
+                                    val clamped = target.coerceIn(0, maxVolume)
+                                    audio?.setStreamVolume(AudioManager.STREAM_MUSIC, clamped, 0)
+                                    hud = "音量 ${clamped * 100 / maxVolume}%"
+                                }
+
+                                else -> {
+                                    val target = (brightBase + dy / size.height).coerceIn(0.05f, 1f)
+                                    activity?.window?.let { window ->
+                                        window.attributes =
+                                            window.attributes.apply { screenBrightness = target }
+                                    }
+                                    hud = "亮度 ${(target * 100).toInt()}%"
+                                }
+                            }
                         }
-                        mode = 0
-                        hud = null
-                    },
-                    onDragCancel = {
-                        dragging = false
-                        mode = 0
-                        hud = null
-                    },
-                )
+                        if (!change.pressed) break
+                    }
+
+                    if (pastSlop && mode == 1 && dragging) {
+                        player.seekTo(dragValue.toLong())
+                        position = dragValue.toLong()
+                    }
+                    dragging = false
+                    hud = null
+
+                    if (!pastSlop && !childHandled) {
+                        // 落在右上「锁」按钮上的那一下自己处理，不走控制条显隐，
+                        // 否则两套逻辑会打架（按钮点不动、或者锁上又立刻弹回来）
+                        val onLockButton = fullscreen && showControls &&
+                            startX > size.width - size.height * 0.12f &&
+                            abs(startY - size.height / 2f) < size.height * 0.08f
+                        if (onLockButton) {
+                            if (locked) {
+                                locked = false
+                                showControls = true
+                            } else {
+                                // 锁上就把控制条和按钮一起收起来，画面干净
+                                locked = true
+                                showControls = false
+                            }
+                            lastTapMs = downMs
+                        } else if (locked) {
+                            // 锁屏时点一下只把「解锁」露出来，不碰播放状态
+                            showControls = !showControls
+                        } else if (downMs - lastTapMs < 280) {
+                            lastTapMs = 0
+                            if (player.isPlaying) player.pause() else player.play()
+                            showControls = true
+                        } else {
+                            lastTapMs = downMs
+                            showControls = !showControls
+                        }
+                    }
+                }
             }
     ) {
         if (buffering) {
@@ -220,7 +262,7 @@ fun PlayerOverlay(
             }
         }
 
-        AnimatedVisibility(visible = showControls, enter = fadeIn(), exit = fadeOut()) {
+        AnimatedVisibility(visible = showControls && !locked, enter = fadeIn(), exit = fadeOut()) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -234,9 +276,11 @@ fun PlayerOverlay(
                     )
             ) {
 
+                // 锁屏按钮放屏幕右缘正中（见上面那个 Box），这里不再重复放一个
+
                 // 弹幕开关放在右上角：底部那行已经塞了进度条、集数控制、倍速和全屏，
                 // 再加一个按钮会把「全屏」挤出屏幕
-                if (onToggleDanmaku != null) {
+                if (onToggleDanmaku != null && showDanmakuChips) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -404,6 +448,28 @@ fun PlayerOverlay(
                         )
                     }
                 }
+            }
+        }
+
+        // 锁屏按钮放屏幕右缘正中：全屏躺着看时拇指正好在那儿，一伸就够到。
+        // 未锁定时跟控制条一起显示/隐藏；锁上以后也收起来，点一下画面才露出来。
+        // 必须放在控制层之后（同层最后画的在上），否则点不到——控制条会盖住它。
+        if (fullscreen && showControls) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 10.dp)
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = if (locked) 0.22f else 0.38f))
+                    .border(1.dp, Color.White.copy(alpha = 0.30f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (locked) "解锁" else "锁",
+                    color = Color.White.copy(alpha = if (locked) 0.7f else 0.92f),
+                    style = MaterialTheme.typography.labelSmall,
+                )
             }
         }
     }

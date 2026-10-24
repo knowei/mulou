@@ -25,3 +25,6 @@ dist/rules*.md
 *.iml
 .workbuddy/
 __pycache__/
+
+# UI 设计稿（生成的概念图，16MB，只做参考，不进仓库）
+UI*

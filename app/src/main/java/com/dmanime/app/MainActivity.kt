@@ -45,10 +45,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Search
@@ -85,6 +90,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -115,6 +121,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -127,6 +134,10 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
+import com.dmanime.sniff.PlaybackStallMonitor
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
@@ -140,9 +151,11 @@ import com.dmanime.danmaku.DanmakuOrigin
 import com.dmanime.rules.model.AnimeRule
 import com.dmanime.rules.model.SearchItem
 import com.dmanime.catalog.today
+import com.dmanime.catalog.TitleVersion
 import kotlinx.coroutines.delay
 import java.io.File
 import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 
 // ------------------------------------------------------------------ 主题（蓝白 / 护眼）
 
@@ -273,6 +286,77 @@ private val GreenDarkColors = darkColorScheme(
     error = Color(0xFFF2B8B5),
 )
 
+/**
+ * 晨光配色：按 UI 设计稿取色——米白底 (#FBFDF8)、灰绿主色 (#6D8B84)、
+ * 暖褐正文 (#4B343B)。和另外两套的区别是底色不是纯白，而是偏暖的米白，
+ * 正文也不用纯黑，用带一点褐的深色，整体柔和不刺眼。
+ */
+private val DawnLightColors = lightColorScheme(
+    primary = Color(0xFF6D8B84),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFDCE9E2),
+    onPrimaryContainer = Color(0xFF22362F),
+    secondary = Color(0xFF8FA9A1),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFE8F0E8),
+    onSecondaryContainer = Color(0xFF2A3C36),
+    tertiary = Color(0xFFA98467),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFF0E3D5),
+    onTertiaryContainer = Color(0xFF3B2A1C),
+    background = Color(0xFFFBFDF8),
+    onBackground = Color(0xFF3B3335),
+    surface = Color(0xFFFDFEFA),
+    onSurface = Color(0xFF3B3335),
+    surfaceVariant = Color(0xFFE8EFE6),
+    onSurfaceVariant = Color(0xFF5A6459),
+    surfaceTint = Color(0xFF6D8B84),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF7FAF4),
+    surfaceContainer = Color(0xFFF2F6F0),
+    surfaceContainerHigh = Color(0xFFEDF2EA),
+    surfaceContainerHighest = Color(0xFFE7EDE5),
+    inverseSurface = Color(0xFF2F3A35),
+    inverseOnSurface = Color(0xFFF1F5EF),
+    inversePrimary = Color(0xFFA7C6BC),
+    outline = Color(0xFFA9B7AA),
+    outlineVariant = Color(0xFFCDD8CB),
+    error = Color(0xFFA93B2E),
+)
+
+private val DawnDarkColors = darkColorScheme(
+    primary = Color(0xFFA7C6BC),
+    onPrimary = Color(0xFF16302A),
+    primaryContainer = Color(0xFF2C453E),
+    onPrimaryContainer = Color(0xFFCBE2D9),
+    secondary = Color(0xFF8FAFA4),
+    onSecondary = Color(0xFF14251F),
+    secondaryContainer = Color(0xFF33473F),
+    onSecondaryContainer = Color(0xFFC9DED4),
+    tertiary = Color(0xFFC6A98A),
+    onTertiary = Color(0xFF2F2418),
+    tertiaryContainer = Color(0xFF45372A),
+    onTertiaryContainer = Color(0xFFE8D8C6),
+    background = Color(0xFF101614),
+    onBackground = Color(0xFFE3EAE4),
+    surface = Color(0xFF151C19),
+    onSurface = Color(0xFFE3EAE4),
+    surfaceVariant = Color(0xFF26302B),
+    onSurfaceVariant = Color(0xFFB4C2B8),
+    surfaceTint = Color(0xFFA7C6BC),
+    surfaceContainerLowest = Color(0xFF0A0F0D),
+    surfaceContainerLow = Color(0xFF141B18),
+    surfaceContainer = Color(0xFF19211D),
+    surfaceContainerHigh = Color(0xFF1E2723),
+    surfaceContainerHighest = Color(0xFF232D28),
+    inverseSurface = Color(0xFFE3EAE4),
+    inverseOnSurface = Color(0xFF1C2420),
+    inversePrimary = Color(0xFF3F5F55),
+    outline = Color(0xFF6E7D73),
+    outlineVariant = Color(0xFF3E4A43),
+    error = Color(0xFFFFB4A9),
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -308,6 +392,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(
                 colorScheme = when (vm.state.palette) {
                     "green" -> if (darkTheme) GreenDarkColors else GreenLightColors
+                    "dawn" -> if (darkTheme) DawnDarkColors else DawnLightColors
                     else -> if (darkTheme) BlueDarkColors else BlueLightColors
                 },
             ) {
@@ -803,24 +888,26 @@ private fun SectionHeader(title: String, subtitle: String) {
     }
 }
 
-/** 首页「更新」区块能来回翻几天：前天到后天（一周七天的日历本来就都在手里）。 */
-private const val DAY_MIN = -2
-private const val DAY_MAX = 2
+/** 更新表能翻的范围：日历总共就一周，往前到上周日、往后到本周日。 */
+private const val DAY_MIN = -6
+private const val DAY_MAX = 6
 
 private fun dayTitle(offset: Int): String = when (offset) {
     -2 -> "前天更新"
     -1 -> "昨日更新"
+    0 -> "今日更新"
     1 -> "明日更新"
     2 -> "后天更新"
-    else -> "今日更新"
+    else -> if (offset < 0) "${-offset} 天前" else "${offset} 天后"
 }
 
 private fun dayEmptyText(offset: Int): String = when (offset) {
     -2 -> "前天没有更新"
     -1 -> "昨天没有更新"
+    0 -> "今天没有更新"
     1 -> "明天没有更新"
     2 -> "后天没有更新"
-    else -> "今天没有更新"
+    else -> "这天没有番剧更新"
 }
 
 @Composable
@@ -938,6 +1025,7 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
     val subject = state.detail ?: return
     val info = state.detailInfo
     var expanded by remember(subject.id) { mutableStateOf(false) }
+    var showMore by remember(subject.id) { mutableStateOf(false) }
     val watched = state.watches.any { it.subjectId == subject.id }
     val fromPlayer = state.detailOrigin == Screen.Player
     val summary = info?.summary?.takeIf { it.isNotBlank() } ?: subject.summary
@@ -1056,18 +1144,72 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
             }
         }
 
-        // 角色 / 声优
-        if (state.characters.isNotEmpty()) {
-            item {
-                Text(
-                    "角色 / 声优",
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 6.dp),
-                )
+        // 选集入口：点开弹出集数面板（后台先找源，找到直接铺集数）
+        // 放在主操作正下方——它比角色横条、标签更常用，之前得先滑一屏才看到。
+        if (!fromPlayer) item {
+            val summaryText = AiringState.summary(info)
+            OutlinedButton(
+                onClick = vm::openEpisodeSheet,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            ) {
+                Text(if (summaryText.isEmpty()) "选集" else "选集 · $summaryText")
             }
+        }
+
+        if (summary.isNotBlank()) {
+            item {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = if (expanded) Int.MAX_VALUE else 4,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (summary.length > 90) {
+                        TextButton(
+                            onClick = { expanded = !expanded },
+                            contentPadding = PaddingValues(0.dp),
+                        ) { Text(if (expanded) "收起" else "展开简介") }
+                    }
+                }
+            }
+        }
+
+        // 角色 / 声优 / 标签：都属于"想看的才看"，默认收起，首屏才有留白。
+        val hasMore = state.characters.isNotEmpty() || !info?.tags.isNullOrEmpty()
+        if (hasMore) {
+            item {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { showMore = !showMore }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "角色 / 标签",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (showMore) "收起" else "展开",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Icon(
+                        if (showMore) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
+            }
+        }
+
+        if (showMore && state.characters.isNotEmpty()) {
             item {
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(state.characters.take(24), key = { it.id }) { character ->
@@ -1116,18 +1258,7 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
             }
         }
 
-        // 选集入口：点开弹出集数面板（后台先找源，找到直接铺集数）
-        if (!fromPlayer) item {
-            val summaryText = AiringState.summary(info)
-            OutlinedButton(
-                onClick = vm::openEpisodeSheet,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            ) {
-                Text(if (summaryText.isEmpty()) "选集" else "选集 · $summaryText")
-            }
-        }
-
-        if (!info?.tags.isNullOrEmpty()) {
+        if (showMore && !info?.tags.isNullOrEmpty()) {
             item {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -1135,25 +1266,6 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
                 ) {
                     items(info.tags.take(12), key = { it.name }) { tag ->
                         AssistChip(onClick = {}, label = { Text(tag.name) })
-                    }
-                }
-            }
-        }
-
-        if (summary.isNotBlank()) {
-            item {
-                Column(Modifier.padding(horizontal = 16.dp)) {
-                    Text(
-                        summary,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = if (expanded) Int.MAX_VALUE else 4,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (summary.length > 90) {
-                        TextButton(
-                            onClick = { expanded = !expanded },
-                            contentPadding = PaddingValues(0.dp),
-                        ) { Text(if (expanded) "收起" else "展开简介") }
                     }
                 }
             }
@@ -1276,8 +1388,30 @@ private fun EpisodeSheet(vm: AppViewModel, state: UiState) {
 
 // ------------------------------------------------------------------ 搜索
 
+/**
+ * 版本标记（第几季 / 剧场版 / OVA）的识别放在 core/catalog 的 [TitleVersion] 里，
+ * 这样能写单测，源面板和详情页也能共用同一套判断。
+ */
+private fun seasonLabel(title: String): String? = TitleVersion.seasonLabel(title)
+
+/** 版本小标签：只给版本信息，不加装饰。 */
 @Composable
-private fun SearchScreen(vm: AppViewModel, state: UiState) {    var keyword by remember { mutableStateOf(state.keyword) }
+private fun SeasonBadge(label: String) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.primary,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
+}
+
+@Composable
+private fun SearchScreen(vm: AppViewModel, state: UiState) {
+    var keyword by remember { mutableStateOf(state.keyword) }
     val all = state.home.days.flatMap { it.items }.distinctBy { it.id }
     val matches = remember(keyword, all) {
         if (keyword.isBlank()) {
@@ -1448,12 +1582,19 @@ private fun SearchScreen(vm: AppViewModel, state: UiState) {    var keyword by r
                         }
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(
-                                subject.displayTitle,
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Row {
+                                seasonLabel(subject.displayTitle)?.let { label ->
+                                    SeasonBadge(label)
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                Text(
+                                    subject.displayTitle,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                             Text(
                                 buildString {
                                     if (subject.rating.score > 0) append("%.1f 分".format(subject.rating.score))
@@ -1523,12 +1664,19 @@ private fun SearchScreen(vm: AppViewModel, state: UiState) {    var keyword by r
                             }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(
-                                    result.displayTitle,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Row {
+                                    seasonLabel(result.displayTitle)?.let { label ->
+                                        SeasonBadge(label)
+                                        Spacer(Modifier.width(6.dp))
+                                    }
+                                    Text(
+                                        result.displayTitle,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
                                 Text(
                                     buildString {
                                         if (result.rating.score > 0) append("%.1f 分".format(result.rating.score))
@@ -1632,7 +1780,20 @@ private fun SearchScreen(vm: AppViewModel, state: UiState) {    var keyword by r
                             key = { index, _ -> "${hit.ruleName}-$index" },
                         ) { _, item ->
                             ListItem(
-                                headlineContent = { Text(item.name) },
+                                headlineContent = {
+                                    Row {
+                                        seasonLabel(item.name)?.let { label ->
+                                            SeasonBadge(label)
+                                            Spacer(Modifier.width(6.dp))
+                                        }
+                                        Text(
+                                            item.name,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                },
                                 supportingContent = {
                                     Text(item.src, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 },
@@ -2037,8 +2198,11 @@ private fun IndexChip(label: String, selected: Boolean, onClick: () -> Unit) {
 
 // ------------------------------------------------------------------ 更新表
 
+/** 一周七格从左到右，跟日历一样周一开头。 */
+private val WEEK_HEAD = listOf("一", "二", "三", "四", "五", "六", "日")
+
 /**
- * 更新表：一屏看完某一天的更新，按 ◀ ▶ 换日期。
+ * 更新表：先看这一周哪几天有更新，点哪天看哪天。
  *
  * 数据是首页已经取回来的七日日历，换日期只是换 weekday 取同一份数据，
  * 所以这里没有加载态，也不该有等待感。
@@ -2047,48 +2211,117 @@ private fun IndexChip(label: String, selected: Boolean, onClick: () -> Unit) {
 private fun DayCalendarScreen(vm: AppViewModel, state: UiState) {
     val days = state.home.days
     val offset = state.dayOffset
-    val weekdayId = (((LocalDate.now().dayOfWeek.value + offset - 1) % 7) + 7) % 7 + 1
-    val day = days.today(weekdayId)
+    val today = LocalDate.now()
+    val date = today.plusDays(offset.toLong())
+    val day = days.today(date.dayOfWeek.value)
     val items = day?.items.orEmpty()
+    val weekStart = date.minusDays((date.dayOfWeek.value - 1).toLong())
 
     Column(Modifier.fillMaxSize()) {
+        // 月份 + 一键回到今天
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp, top = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "◀",
+                "${date.year}年${date.monthValue}月",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "今天",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (offset == 0) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = offset != 0) { vm.setDayOffset(0) }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
+
+        // 一周七格；选中的那天填主色，超出一周范围的灰掉
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            WEEK_HEAD.forEachIndexed { index, name ->
+                val cell = weekStart.plusDays(index.toLong())
+                val delta = ChronoUnit.DAYS.between(today, cell).toInt()
+                val selected = delta == offset
+                val usable = delta in DAY_MIN..DAY_MAX
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (selected) MaterialTheme.colorScheme.primary
+                            else Color.Transparent
+                        )
+                        .clickable(enabled = usable) { vm.setDayOffset(delta) }
+                        .padding(vertical = 5.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(1.dp))
+                    Text(
+                        cell.dayOfMonth.toString(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = when {
+                            selected -> MaterialTheme.colorScheme.onPrimary
+                            !usable -> MaterialTheme.colorScheme.outlineVariant
+                            else -> MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                }
+            }
+        }
+
+        // 眼下这一天是哪天、几部
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "${date.monthValue}月${date.dayOfMonth}日 ${day?.weekday?.cn.orEmpty()}",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    "${dayTitle(offset)} · ${items.size} 部",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                "‹",
                 style = MaterialTheme.typography.titleMedium,
                 color = if (offset > DAY_MIN) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.outlineVariant,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = offset > DAY_MIN) { vm.shiftDay(-1) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 2.dp),
             )
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    dayTitle(offset),
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center,
-                )
-                Text(
-                    day?.weekday?.cn.orEmpty(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             Text(
-                "▶",
+                "›",
                 style = MaterialTheme.typography.titleMedium,
                 color = if (offset < DAY_MAX) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.outlineVariant,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = offset < DAY_MAX) { vm.shiftDay(1) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 2.dp),
             )
         }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
         if (items.isEmpty()) {
             Text(
@@ -2881,6 +3114,7 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                         listOf(
                             "blue" to "蓝白",
                             "green" to "护眼",
+                            "dawn" to "晨光",
                         ).forEach { (palette, label) ->
                             FilterChip(
                                 selected = state.palette == palette,
@@ -3035,6 +3269,7 @@ private fun EpisodeChip(
     available: Boolean,
     sourceBehind: Boolean,
     enabled: Boolean = true,
+    subText: String = "",
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -3065,19 +3300,46 @@ private fun EpisodeChip(
         shape = RoundedCornerShape(10.dp),
         color = container,
         border = BorderStroke(1.dp, border),
-        // 极淡的描边让灰格和浅色背景分得开；不要阴影，格子会显得肿
-        modifier = modifier.height(36.dp),
+        // 描边极淡，让灰格和浅色背景分得开；不要阴影，格子会显得肿。
+        // 高度一律按带副标题的那档算——同一排里有的写「未更新」有的不写，
+        // 跟着内容缩就会高矮不齐，一排格子看得七上八下
+        modifier = modifier.height(46.dp),
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                text = text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (current) FontWeight.SemiBold else null,
-                color = label,
-            )
+            if (subText.isEmpty()) {
+                Text(
+                    text = text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (current) FontWeight.SemiBold else null,
+                    color = label,
+                )
+            } else {
+                // 还没更新的格子：数字 + 一行小字说明，比在数字上打叉好读
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        text = text,
+                        maxLines = 1,
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (current) FontWeight.SemiBold else null,
+                        color = label,
+                    )
+                    Text(
+                        text = subText,
+                        maxLines = 1,
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 9.sp,
+                        color = label.copy(alpha = 0.8f),
+                    )
+                }
+            }
         }
     }
 }
@@ -3248,39 +3510,225 @@ private fun buildSourceGroups(state: UiState, rank: (String) -> Int): List<Sourc
 
 /** 播放页顶部的源入口：一行显示当前源 + 源数量，点击弹面板。 */
 @Composable
-private fun SourceBar(vm: AppViewModel, state: UiState, onClick: () -> Unit) {
+private fun SourceCard(vm: AppViewModel, state: UiState, onClick: () -> Unit) {
+    val plus = state.playQuery.ifBlank { state.keyword }
+    val groupCount = buildSourceGroups(state) { name -> vm.rankFor(plus, name) }.size
+    val failedCount = state.hits.count { it.error != null || it.items.isEmpty() }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+    ) {
+        Row(
+            Modifier.clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 绿勾 = 这一路是能播的；换成圈选比一个 ▸ 更一眼
+            Box(
+                Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (state.entryRuleName.isEmpty()) "正在找源…" else state.entryRuleName,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    when {
+                        state.busy -> "可用 $groupCount · 搜索中…"
+                        // 从观看记录/下载恢复播放时没有搜索过程，hits 是空的，
+                        // 这时候写"可用 0"会让人以为一个源都没有
+                        groupCount == 0 -> "点这里换源"
+                        failedCount > 0 -> "可用 $groupCount · 失败 $failedCount"
+                        else -> "可用 $groupCount"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Box(
+                Modifier
+                    .height(28.dp)
+                    .width(1.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "换源 ›",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+/**
+ * 播放页的三个高频动作：弹幕开关、弹幕调整、下载。
+ *
+ * 这三件事以前散在顶栏和折叠卡片里，进一集要摸两三个地方；摊平成一行。
+ */
+@Composable
+private fun PlayerActionRow(
+    vm: AppViewModel,
+    state: UiState,
+    onAdjustDanmaku: () -> Unit,
+) {
+    val downloading = remember(state.playSubjectId, state.playEpisodeIndex, state.downloads.size) {
+        vm.downloadOfCurrent()
+    }
+
     Row(
         Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-            .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val plus = state.playQuery.ifBlank { state.keyword }
-        val groupCount = buildSourceGroups(state) { name -> vm.rankFor(plus, name) }.size
-        val failedCount = state.hits.count { it.error != null || it.items.isEmpty() }
+        ActionItem(
+            label = if (state.danmakuOn) "弹幕已开启" else "弹幕已关闭",
+            active = state.danmakuOn,
+            modifier = Modifier.weight(1f),
+            onClick = { vm.toggleDanmaku() },
+        )
+        ActionDivider()
+        ActionItem(
+            label = "调整",
+            modifier = Modifier.weight(1f),
+            onClick = onAdjustDanmaku,
+        )
+        ActionDivider()
+        ActionItem(
+            label = when {
+                downloading?.done == true -> "已下载"
+                downloading != null -> "下载中"
+                else -> "下载"
+            },
+            modifier = Modifier.weight(1f),
+            onClick = {
+                if (downloading == null) vm.downloadCurrentEpisode()
+                else vm.openDownloads()
+            },
+        )
+    }
+}
+
+@Composable
+private fun ActionDivider() {
+    Box(
+        Modifier
+            .height(18.dp)
+            .width(1.dp)
+            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+    )
+}
+
+@Composable
+private fun ActionItem(
+    label: String,
+    modifier: Modifier = Modifier,
+    active: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelLarge,
+        color = if (active) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+        textAlign = TextAlign.Center,
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+    )
+}
+
+/**
+ * 播放信息：线路、集数、直链、耗时这些，平时不看，出问题时要能翻到。
+ * 默认收起。
+ */
+@Composable
+private fun PlaybackInfoSection(vm: AppViewModel, state: UiState, media: PlayMedia?) {
+    var expanded by remember { mutableStateOf(false) }
+    val road = state.roads.getOrNull(state.playRoadIndex)
+    val status = state.sourceStatus[state.entryRuleName]
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { expanded = !expanded }
+                .padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("播放信息", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            Icon(
+                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+
+        if (expanded) {
+            Column(Modifier.padding(bottom = 8.dp)) {
+                InfoLine("线路", road?.let { "${it.name} · ${it.urls.size} 集" }.orEmpty())
+                InfoLine("集号", if (state.playEpisodeIndex >= 0) "第 ${state.playEpisodeIndex + 1} 集" else "—")
+                InfoLine("片源", state.entryRuleName)
+                InfoLine(
+                    "耗时",
+                    when {
+                        state.busy -> "搜索中…"
+                        status != null && status.latencyMs > 0 -> "${status.latencyMs} ms"
+                        else -> "—"
+                    },
+                )
+                InfoLine("直链", media?.url.orEmpty(), single = false)
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoLine(label: String, value: String, single: Boolean = true) {
+    if (value.isBlank()) return
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Text(
-            if (state.entryRuleName.isEmpty()) "正在找源…" else "▶ ${state.entryRuleName}",
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(44.dp),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = if (single) 1 else 4,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        Text(
-            when {
-                state.busy -> "源 $groupCount · 搜索中…"
-                // 从观看记录/下载恢复播放时没有搜索过程，hits 是空的，
-                // 这时候写"源 0"会让人以为一个源都没有，其实点进去还能换。
-                groupCount == 0 -> "换源"
-                failedCount > 0 -> "源 $groupCount · 失败 $failedCount"
-                else -> "源 $groupCount"
-            },
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.width(4.dp))
-        Text("▾", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -3631,11 +4079,17 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
 
     // 注意：key 只放 URL。playStartMs 会在播放过程中不断刷新，
     // 放进 key 会导致播放器每 5 秒被重建一次。
-    val exoPlayer = remember(media?.url) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val stallMonitor = remember(state.playPageUrl, state.entryRuleName, state.episodeNumber) {
+        PlaybackStallMonitor()
+    }
+    val exoPlayer = remember(media?.url, media?.headers, state.playbackRevision) {
         media?.let {
             val httpFactory = DefaultHttpDataSource.Factory()
                 .setDefaultRequestProperties(it.headers)
                 .setUserAgent(DEFAULT_UA)
+                .setConnectTimeoutMs(10_000)
+                .setReadTimeoutMs(15_000)
             val upstream = DefaultDataSource.Factory(context, httpFactory)
             // 只有「已下完」的集才挂缓存：直接读本地分片，断网也能播。
             // 在线播放不挂缓存，避免看一集就往缓存目录塞几百 MB。
@@ -3659,6 +4113,12 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             }
             ExoPlayer.Builder(context)
                 .setMediaSourceFactory(DefaultMediaSourceFactory(factory))
+                .setLoadControl(DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(30_000, 90_000, 2_500, 5_000)
+                    // Keep a byte cap: a high-bitrate source must not consume unbounded RAM.
+                    .setTargetBufferBytes(64 * 1024 * 1024)
+                    .setPrioritizeTimeOverSizeThresholds(false)
+                    .build())
                 .build()
                 .apply {
                     // 第二个参数就是起播位置：续播不用等 prepare 后再 seek
@@ -3668,6 +4128,8 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                 }
         }
     }
+
+    var pendingPlaybackError by remember(exoPlayer) { mutableStateOf<PlaybackException?>(null) }
 
     // 每 5 秒回报一次进度，首页「继续观看」靠它
     LaunchedEffect(exoPlayer) {
@@ -3685,15 +4147,72 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
         }
     }
 
+    fun recoverPlayback(action: PlaybackStallMonitor.Action, reason: String) {
+        val player = exoPlayer ?: return
+        // Ignore callbacks from a player whose source has already been replaced.
+        if (vm.state.playMedia != media || vm.state.playbackRevision != state.playbackRevision) return
+        val position = player.currentPosition.coerceAtLeast(0)
+        vm.updatePlayPosition(position)
+        if (player.duration > 0) vm.saveProgress(position, player.duration)
+        vm.appendLog("播放恢复：$reason；动作=$action；位置=${position / 1000}s")
+        when (action) {
+            PlaybackStallMonitor.Action.Reconnect -> {
+                player.stop()
+                player.seekTo(position)
+                player.prepare()
+                player.playWhenReady = true
+            }
+            PlaybackStallMonitor.Action.RefreshAddress -> vm.refreshPlaybackAddress(position)
+            PlaybackStallMonitor.Action.SwitchSource -> vm.onPlaybackError(reason, position)
+        }
+    }
+
+    LaunchedEffect(exoPlayer, lifecycle) {
+        val player = exoPlayer ?: return@LaunchedEffect
+        var wasBuffering = false
+        stallMonitor.resetWindow()
+        while (true) {
+            delay(1_000)
+            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) || !player.playWhenReady ||
+                player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE) {
+                stallMonitor.resetWindow()
+                wasBuffering = false
+                continue
+            }
+            pendingPlaybackError?.let { error ->
+                pendingPlaybackError = null
+                val action = if (error.errorCode in 2000..2999) stallMonitor.nextAction()
+                    else PlaybackStallMonitor.Action.SwitchSource
+                if (action != null) recoverPlayback(action, error.errorCodeName)
+            }
+            if (vm.state.playMedia != media) continue
+            val buffering = player.playbackState == Player.STATE_BUFFERING
+            val action = stallMonitor.sample(android.os.SystemClock.elapsedRealtime(), buffering, player.bufferedPosition)
+            if (buffering && !wasBuffering) {
+                vm.appendLog("开始缓冲：第${stallMonitor.stallCount}次；预缓冲=${player.totalBufferedDuration / 1000}s")
+            } else if (!buffering && wasBuffering && player.playbackState == Player.STATE_READY) {
+                vm.appendLog("缓冲恢复：耗时=${stallMonitor.lastDurationMs}ms")
+            }
+            wasBuffering = buffering
+            if (action != null) recoverPlayback(action, "缓冲停滞${stallMonitor.lastDurationMs / 1000}秒")
+        }
+    }
+
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                vm.onPlaybackError("${error.errorCodeName}：${error.message ?: "未知错误"}")
+                // Process on the next foreground tick, never resume a paused/background player.
+                pendingPlaybackError = error
+            }
+
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) stallMonitor.resetWindow()
             }
 
             // 播完自动连播下一集
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED) vm.playNextEpisode()
+                // 关了「自动连播」就在片尾停住，别自己切走
+                if (playbackState == Player.STATE_ENDED && vm.state.autoNext) vm.playNextEpisode()
             }
         }
         exoPlayer?.addListener(listener)
@@ -3703,10 +4222,14 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
         }
     }
 
-    val sniffer = remember(state.playPageUrl) {
-        PageSniffer(context, onCandidate = vm::onSniffCandidate, onStatus = vm::appendLog)
+    val sniffer = remember(state.playPageUrl, state.playbackRevision) {
+        val pageUrl = state.playPageUrl
+        val revision = state.playbackRevision
+        PageSniffer(context, onCandidate = { url ->
+            if (vm.state.playPageUrl == pageUrl && vm.state.playbackRevision == revision) vm.onSniffCandidate(url)
+        }, onStatus = vm::appendLog)
     }
-    LaunchedEffect(state.playPageUrl) {
+    LaunchedEffect(state.playPageUrl, state.playbackRevision) {
         if (state.playPageUrl.isNotEmpty()) sniffer.load(state.playPageUrl)
     }
     DisposableEffect(sniffer) {
@@ -3719,11 +4242,11 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
     }
 
     // 起播看门狗：15 秒还嗅不到播放地址就换源，别让用户卡在"正在起播"
-    LaunchedEffect(state.playPageUrl, state.playMedia) {
+    LaunchedEffect(state.playPageUrl, state.playMedia, state.playbackRevision) {
         if (state.playPageUrl.isEmpty() || state.playMedia != null) return@LaunchedEffect
         delay(15_000)
         if (vm.state.playMedia == null && vm.state.playPhase == PlayPhase.Starting) {
-            vm.onPlaybackError("起播超时：15 秒没有找到播放地址")
+            vm.onPlaybackError("起播超时：15 秒没有找到播放地址", vm.state.playStartMs)
         }
     }
 
@@ -3837,6 +4360,7 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                     PlayerOverlay(
                         player = exoPlayer,
                         fullscreen = false,
+                        showDanmakuChips = false,
                         onToggleFullscreen = { vm.setFullscreen(true) },
                         onToggleDanmaku = { vm.toggleDanmaku() },
                         danmakuOn = state.danmakuOn,
@@ -3903,11 +4427,8 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             }
     }
 
-    // 右侧（平板）/ 下方（手机）：源栏 + 详情·评论 + 选集
+    // 右侧（平板）/ 下方（手机）：源卡片 + 动作行 + 详情·评论 + 选集
     val playerPanels: @Composable ColumnScope.() -> Unit = {
-            if (state.entryRuleName.isNotEmpty()) {
-                SourceBar(vm, state) { showSources = true }
-            }
             if (showSources) {
                 SourceSheet(vm, state) { showSources = false }
             }
@@ -3915,14 +4436,70 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             PlayerTabBar(selected = playerTab, onSelect = { playerTab = it })
 
             if (playerTab == 0) {
+            // 只有用户自己下拉时才转圈：搜源本身也会把 busy 置真，
+            // 直接拿 busy 当 isRefreshing 会让加载圈一直悬在源卡片上
+            var pulling by remember { mutableStateOf(false) }
+            LaunchedEffect(state.busy) { if (!state.busy) pulling = false }
             PullToRefreshBox(
-                isRefreshing = state.busy,
-                onRefresh = { vm.refreshSources() },
+                isRefreshing = pulling,
+                onRefresh = { pulling = true; vm.refreshSources() },
                 modifier = Modifier.weight(1f),
             ) {
             LazyColumn(Modifier.fillMaxSize()) {
-                item { PlayerInfoCard(vm, state) }
-                item { DanmakuSettingsCard(vm, state) }
+                // 集标题 + 番剧入口。标题用片源给的集名，右边一行链到详情页，
+                // 播放页就不再重复铺一遍封面和简介
+                item {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
+                        val epName = road?.names?.getOrNull(state.playEpisodeIndex).orEmpty()
+                        Text(
+                            epName.ifBlank {
+                                if (state.playEpisodeIndex >= 0) "第 ${state.playEpisodeIndex + 1} 集" else "播放"
+                            },
+                            style = MaterialTheme.typography.titleLarge,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (state.entryName.isNotBlank()) {
+                            Text(
+                                "${state.entryName} ›",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(0.6f, fill = false)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { vm.openDetailFromPlayer() }
+                                    .padding(start = 8.dp, top = 4.dp, bottom = 4.dp),
+                                textAlign = TextAlign.End,
+                            )
+                        }
+                    }
+                }
+
+                // 源卡片：当前在用的线路 + 可用/失败计数，右边「换源」
+                item {
+                    if (state.entryRuleName.isNotEmpty()) {
+                        SourceCard(vm, state) { showSources = true }
+                    }
+                }
+
+                // 三个动作：弹幕开关 / 弹幕调整 / 下载（都常用，摊平放在一行）
+                item {
+                    PlayerActionRow(
+                        vm = vm,
+                        state = state,
+                        onAdjustDanmaku = { danmakuSheet = true },
+                    )
+                }
+
+                item { HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)) }
 
                 if (state.playStartMs > 0) {
                     item {
@@ -3948,27 +4525,44 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
 
                 if (road != null && episodes > 0) {
                     item {
-                        Row(
-                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 2.dp)
                         ) {
-                            Text("选集", style = MaterialTheme.typography.titleSmall)
-                            Spacer(Modifier.width(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("选集", style = MaterialTheme.typography.titleLarge)
+                                Spacer(Modifier.width(8.dp))
+                                val totalEps = AiringState.totalEpisodes(state.detailInfo)
+                                Text(
+                                    if (totalEps > 0) "共 $totalEps 集" else "共 $episodes 集",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.weight(1f))
+                                Text(
+                                    "自动连播",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Switch(
+                                    checked = state.autoNext,
+                                    onCheckedChange = { vm.setAutoNext(it) },
+                                    modifier = Modifier.height(28.dp),
+                                )
+                            }
+                            // 片源给的是它自己有几集，官方总集数另算；少集时把差别写清楚
                             val totalEps = AiringState.totalEpisodes(state.detailInfo)
+                            val line = when {
+                                totalEps > episodes -> "片源更新至 $episodes 集 / 全 $totalEps 集"
+                                else -> "${road.name} · $episodes 集"
+                            }
                             Text(
-                                // 集数有两个来源，混在一起容易看糊涂：片源给的是它自己有
-                                // 几集，全 N 集是官方总集数。少集时把两边都写出来。
-                                if (totalEps > episodes) "片源 $episodes 集 / 全 $totalEps 集"
-                                else "${road.name} · $episodes 集",
+                                line,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                // 单集作品（剧场版、OVA）只有一格，"第 1 集"读起来没信息量
-                                if (episodes == 1) "正在播放" else "第 ${state.playEpisodeIndex + 1} 集",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 2.dp),
                             )
                         }
                     }
@@ -3998,19 +4592,22 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                                 )
                             }
                         }
-                        items(group.chunked(4)) { chunk ->
+                        items(group.chunked(5)) { chunk ->
                             Row(
-                                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 chunk.forEach { index ->
                                     val available = index < episodes
                                     EpisodeChip(
-                                        text = road.names.getOrNull(index) ?: "${index + 1}",
+                                        // 格子里只留两位数字：5 列下"第01集"挤成一团，
+                                        // 扫数字比读中文快
+                                        text = "%02d".format(index + 1),
                                         current = available && index == state.playEpisodeIndex,
                                         available = available,
                                         // 源还没跟上的集数：灰一点，点开是"还没更新"提示
                                         sourceBehind = !available && index < expected,
+                                        subText = if (available) "" else if (index < expected) "未更新" else "未播出",
                                         onClick = {
                                             if (available) vm.play(road, index)
                                             else vm.showGateFor(index + 1)
@@ -4018,12 +4615,17 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                                         modifier = Modifier.weight(1f),
                                     )
                                 }
-                                // 最后一行不满 4 个也占满 4 格宽度，整片格子才对得齐
-                                repeat(4 - chunk.size) { Spacer(Modifier.weight(1f)) }
+                                // 最后一行不满 5 个也占满 5 格宽度，整片格子才对得齐
+                                repeat(5 - chunk.size) { Spacer(Modifier.weight(1f)) }
                             }
                         }
                     }
                 }
+
+                item { HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)) }
+
+                // 码率、直链、耗时这些平时不看，折叠到最后一行
+                item { PlaybackInfoSection(vm, state, media) }
 
                 item { Spacer(Modifier.height(24.dp)) }
             }
