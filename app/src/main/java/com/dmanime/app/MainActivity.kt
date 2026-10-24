@@ -659,11 +659,12 @@ fun App(vm: AppViewModel) {
 private fun UpdatePromptDialog(vm: AppViewModel, state: UiState) {
     val release = state.update
     if (!state.updatePrompt || release == null) return
+    val ready = state.updateApkPath.isNotBlank()
     AlertDialog(
         onDismissRequest = { vm.dismissUpdate() },
         title = { Text("发现新版本 ${release.version}") },
         text = {
-            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+            Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
                 Text(
                     "当前版本 ${BuildConfig.VERSION_NAME}",
                     style = MaterialTheme.typography.labelMedium,
@@ -671,7 +672,7 @@ private fun UpdatePromptDialog(vm: AppViewModel, state: UiState) {
                 )
                 if (release.notes.isBlank()) {
                     Spacer(Modifier.height(8.dp))
-                    Text("这一版没有写更新说明，点「去更新」看发布页。")
+                    Text("这一版没有写更新说明。")
                 } else {
                     Spacer(Modifier.height(10.dp))
                     Text(
@@ -679,9 +680,58 @@ private fun UpdatePromptDialog(vm: AppViewModel, state: UiState) {
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
+
+                // 应用内更新：下载 → 装，不用去浏览器
+                if (state.updateDownloading || ready || state.updateInstallError.isNotBlank()) {
+                    Spacer(Modifier.height(14.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(12.dp))
+                    when {
+                        state.updateDownloading -> {
+                            LinearProgressIndicator(
+                                progress = { state.updateProgress },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "正在下载 ${(state.updateProgress * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+
+                        ready -> Text(
+                            if (state.updateNeedPermission) "需要先在系统设置里允许「安装未知应用」"
+                            else "安装包已就绪，点「安装」即可覆盖升级（数据保留）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+
+                        else -> Text(
+                            "下载失败：${state.updateInstallError}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+
+                if (!state.updateDownloading && !ready && release.apkUrl.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    TextButton(
+                        onClick = { vm.openUpdate(inApp = false) },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    ) { Text("下载慢？去 GitHub 页面手动下", style = MaterialTheme.typography.labelMedium) }
+                }
             }
         },
-        confirmButton = { TextButton(onClick = { vm.openUpdate() }) { Text("去更新") } },
+        confirmButton = {
+            when {
+                state.updateDownloading -> TextButton(onClick = {}, enabled = false) { Text("下载中…") }
+                ready -> TextButton(onClick = { vm.installUpdate() }) { Text("安装") }
+                state.updateInstallError.isNotBlank() -> TextButton(onClick = { vm.downloadUpdate() }) { Text("重试") }
+                else -> TextButton(onClick = { vm.downloadUpdate() }) { Text("下载更新") }
+            }
+        },
         dismissButton = {
             Row {
                 TextButton(onClick = { vm.dismissUpdate(skipVersion = true) }) { Text("跳过此版本") }

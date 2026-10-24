@@ -3,10 +3,12 @@ package com.dmanime.app
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dmanime.app.download.AppDownloadService
@@ -42,6 +44,7 @@ import com.dmanime.sniff.MediaUrls
 import com.dmanime.sniff.SniffCandidate
 import com.dmanime.sniff.SniffResolver
 import com.dmanime.update.UpdateRelease
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
@@ -57,7 +60,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -276,6 +278,16 @@ data class UiState(
     val updatePrompt: Boolean = false,
     /** 上次检查的时间戳，用来区分「没查过」和「查过且最新」。 */
     val updateCheckedAt: Long = 0,
+    /** 正在下新版本的安装包。 */
+    val updateDownloading: Boolean = false,
+    /** 下载进度 0..1。 */
+    val updateProgress: Float = 0f,
+    /** 已经下好的安装包路径；非空表示可以点「安装」了。 */
+    val updateApkPath: String = "",
+    /** 下载/安装失败的原因。 */
+    val updateInstallError: String = "",
+    /** 系统不让装（需要用户去设置里允许「安装未知应用」）。 */
+    val updateNeedPermission: Boolean = false,
 )
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -2737,7 +2749,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val now = System.currentTimeMillis()
         if (!manual) {
             val last = uiPrefs.getLong("update_auto_at", 0L)
-            if (now - last < AUTO_UPDATE_CHECK_MS) return            uiPrefs.edit().putLong("update_auto_at", now).apply()
+            if (now - last < AUTO_UPDATE_CHECK_MS) return
+            uiPrefs.edit().putLong("update_auto_at", now).apply()
         }
         state = state.copy(updateChecking = true, updateError = "")
         viewModelScope.launch {
@@ -2756,7 +2769,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // 手动点的就立刻弹（含被「跳过此版本」过的，用户自己又要看了）；
                 // 自动检查才受 24 小时一次的限制。
                 val due = manual || (release.version != skipped && now - askedAt >= UPDATE_PROMPT_INTERVAL_MS)
-                state = state.copy(update = release, updatePrompt = due)
+                // 同一个版本上次已经下好过（例如去系统设置开权限导致进程被回收），直接复用，别让用户白下一遍
+                state = state.copy(
+                    update = release,
+                    updatePrompt = due,
+                    updateApkPath = cachedApk(release.version),
+                )
                 appendLog("检查更新：发现 ${release.version}（当前 ${BuildConfig.VERSION_NAME}）")
             }.onFailure {
                 val msg = it.message ?: it.javaClass.simpleName
@@ -2779,9 +2797,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         state = state.copy(updatePrompt = false)
     }
 
-    /** 打开发布页；release 挂了 APK 附件就直接下 APK。 */
-    fun openUpdate() {
+    /**
+     * 打开发布页；release 挂了 APK 附件就在应用内下载。
+     *
+     * @param inApp true = 走应用内更新（下载完直接弹安装器）；false = 以前的行为，
+     *              用浏览器打开链接。没有 APK 附件时两者一样。
+     */
+    fun openUpdate(inApp: Boolean = true) {
         val release = state.update
+        if (inApp && !release?.apkUrl.isNullOrBlank()) {
+            downloadUpdate()
+            return
+        }
         val url = when {
             !release?.apkUrl.isNullOrBlank() -> release?.apkUrl!!
             !release?.pageUrl.isNullOrBlank() -> release?.pageUrl!!
@@ -2792,6 +2819,107 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         }.onFailure { appendLog("打不开更新页面：${it.message}") }
+        state = state.copy(updatePrompt = false)
+    }
+
+    /**
+     * 这个版本的安装包是不是已经躺在缓存里了。
+     *
+     * 用户被系统「安装未知应用」设置弹出去一趟再回来，进程可能已经被回收，
+     * 内存里的 updateApkPath 就没了——文件还在，重新认一下，省一次 11 MB 下载。
+     */
+    private fun cachedApk(version: String): String {
+        val file = File(File(getApplication<Application>().cacheDir, "updates"), "komo-$version.apk")
+        return if (file.exists() && file.length() > 1024) file.absolutePath else ""
+    }
+
+    /**
+     * 在应用内下载新版本的 APK，下完停在「安装」这一步（不自动拉安装器，
+     * 免得用户只是随手点了下更新就被系统弹窗糊一脸）。
+     */
+    fun downloadUpdate() {
+        val release = state.update ?: return
+        if (state.updateDownloading) return
+        // 已经下好了就直装，别重复下
+        if (state.updateApkPath.isNotBlank() && File(state.updateApkPath).exists()) {
+            installUpdate()
+            return
+        }
+        if (release.apkUrl.isBlank()) {
+            openUpdate(inApp = false)
+            return
+        }
+        val app = getApplication<Application>()
+        val dest = File(File(app.cacheDir, "updates"), "komo-${release.version}.apk")
+        state = state.copy(
+            updateDownloading = true,
+            updateProgress = 0f,
+            updateInstallError = "",
+            updateNeedPermission = false,
+        )
+        appendLog("开始下载更新：${release.version}")
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    UpdateDownloader.download(release.apkUrl, dest) { progress ->
+                        state = state.copy(updateProgress = progress)
+                    }
+                }
+            }
+            result.onSuccess {
+                val mb = dest.length() / 1024 / 1024
+                state = state.copy(
+                    updateDownloading = false,
+                    updateProgress = 1f,
+                    updateApkPath = dest.absolutePath,
+                )
+                appendLog("更新下载完成：${dest.name}（${mb} MB），点「安装」继续")
+            }.onFailure {
+                val msg = it.message ?: it.javaClass.simpleName
+                state = state.copy(
+                    updateDownloading = false,
+                    updateProgress = 0f,
+                    updateInstallError = msg,
+                )
+                appendLog("下载更新失败：$msg")
+            }
+        }
+    }
+
+    /** 把下好的安装包交给系统安装器；没权限时先把用户送到「安装未知应用」开关。 */
+    fun installUpdate() {
+        val path = state.updateApkPath.ifBlank { cachedApk(state.update?.version.orEmpty()) }
+        if (path.isBlank()) {
+            downloadUpdate()
+            return
+        }
+        val app = getApplication<Application>()
+        val file = File(path)
+        if (!file.exists()) {
+            state = state.copy(updateApkPath = "")
+            downloadUpdate()
+            return
+        }
+        if (!app.packageManager.canRequestPackageInstalls()) {
+            state = state.copy(updateNeedPermission = true)
+            runCatching {
+                app.startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${app.packageName}"),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.onFailure { appendLog("打不开安装权限设置：${it.message}") }
+            appendLog("需要先允许「安装未知应用」，允许后回到这里再点安装")
+            return
+        }
+        val uri = FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { app.startActivity(intent) }
+            .onFailure { appendLog("打不开安装器：${it.message}") }
         state = state.copy(updatePrompt = false)
     }
 
