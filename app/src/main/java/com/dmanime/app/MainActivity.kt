@@ -3300,8 +3300,10 @@ private fun EpisodeChip(
         shape = RoundedCornerShape(10.dp),
         color = container,
         border = BorderStroke(1.dp, border),
-        // 极淡的描边让灰格和浅色背景分得开；不要阴影，格子会显得肿
-        modifier = modifier.height(if (subText.isEmpty()) 38.dp else 46.dp),
+        // 描边极淡，让灰格和浅色背景分得开；不要阴影，格子会显得肿。
+        // 高度一律按带副标题的那档算——同一排里有的写「未更新」有的不写，
+        // 跟着内容缩就会高矮不齐，一排格子看得七上八下
+        modifier = modifier.height(46.dp),
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             if (subText.isEmpty()) {
