@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -211,7 +212,22 @@ fun PlayerOverlay(
                     hud = null
 
                     if (!pastSlop && !childHandled) {
-                        if (locked) {
+                        // 落在右上「锁」按钮上的那一下自己处理，不走控制条显隐，
+                        // 否则两套逻辑会打架（按钮点不动、或者锁上又立刻弹回来）
+                        val onLockButton = fullscreen && showControls &&
+                            startX > size.width - size.height * 0.12f &&
+                            abs(startY - size.height / 2f) < size.height * 0.08f
+                        if (onLockButton) {
+                            if (locked) {
+                                locked = false
+                                showControls = true
+                            } else {
+                                // 锁上就把控制条和按钮一起收起来，画面干净
+                                locked = true
+                                showControls = false
+                            }
+                            lastTapMs = downMs
+                        } else if (locked) {
                             // 锁屏时点一下只把「解锁」露出来，不碰播放状态
                             showControls = !showControls
                         } else if (downMs - lastTapMs < 280) {
@@ -232,35 +248,6 @@ fun PlayerOverlay(
                 color = Color.White,
                 strokeWidth = 2.dp,
             )
-        }
-
-        // 锁屏按钮放屏幕右缘正中：全屏躺着看时拇指正好在那儿，一伸就够到。
-        // 锁上以后连它也收起来，点一下画面才把「解锁」露出来。
-        if (fullscreen && (!locked || showControls)) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 10.dp)
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = if (locked) 0.22f else 0.38f))
-                    .clickable {
-                        if (locked) {
-                            locked = false
-                            showControls = true
-                        } else {
-                            locked = true
-                            showControls = false
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    if (locked) "解锁" else "锁",
-                    color = Color.White.copy(alpha = if (locked) 0.7f else 0.92f),
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
         }
 
         hud?.let {
@@ -461,6 +448,28 @@ fun PlayerOverlay(
                         )
                     }
                 }
+            }
+        }
+
+        // 锁屏按钮放屏幕右缘正中：全屏躺着看时拇指正好在那儿，一伸就够到。
+        // 未锁定时跟控制条一起显示/隐藏；锁上以后也收起来，点一下画面才露出来。
+        // 必须放在控制层之后（同层最后画的在上），否则点不到——控制条会盖住它。
+        if (fullscreen && showControls) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 10.dp)
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = if (locked) 0.22f else 0.38f))
+                    .border(1.dp, Color.White.copy(alpha = 0.30f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (locked) "解锁" else "锁",
+                    color = Color.White.copy(alpha = if (locked) 0.7f else 0.92f),
+                    style = MaterialTheme.typography.labelSmall,
+                )
             }
         }
     }
