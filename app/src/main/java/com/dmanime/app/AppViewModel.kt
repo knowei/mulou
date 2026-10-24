@@ -63,7 +63,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.net.HttpURLConnection
 import java.net.URL
 
-enum class Screen { Home, Search, Mine, Downloads, Detail, Chapters, Player, Verify, Health, Season, Index, DayCalendar }
+enum class Screen { Home, Search, Mine, Downloads, Detail, Chapters, Player, Verify, Health, Season, Index, DayCalendar, Rules, Advanced, Alerts, About }
 
 /** 「更新表」能选的范围。日历一次给一周，所以这个范围内都能立刻切。 */
 private const val DAY_MAX_OFFSET = 6
@@ -2246,6 +2246,39 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /** 「我的」里的二级页：规则管理 / 高级设置 / 更新提醒。 */
+    fun openRules() {
+        state = state.copy(
+            screen = Screen.Rules,
+            navForward = true,
+            navStack = state.navStack + state.screen,
+        )
+    }
+
+    fun openAdvanced() {
+        state = state.copy(
+            screen = Screen.Advanced,
+            navForward = true,
+            navStack = state.navStack + state.screen,
+        )
+    }
+
+    fun openAbout() {
+        state = state.copy(
+            screen = Screen.About,
+            navForward = true,
+            navStack = state.navStack + state.screen,
+        )
+    }
+
+    fun openAlerts() {
+        state = state.copy(
+            screen = Screen.Alerts,
+            navForward = true,
+            navStack = state.navStack + state.screen,
+        )
+    }
+
     fun refreshDownloads() {
         if (!DownloadUtil.ready) return
         val imageBase = state.imageBase
@@ -2956,7 +2989,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
             // 源体检 / 季度番剧 / 分类索引 / 更新表 / 人机验证：统一弹栈回到进来时那一屏。
             // 以前这些没有分支，点「返回」什么都不会发生。
-            Screen.Health, Screen.Season, Screen.Index, Screen.DayCalendar, Screen.Verify -> state.copy(
+            Screen.Health, Screen.Season, Screen.Index, Screen.DayCalendar, Screen.Verify, Screen.Rules, Screen.Advanced, Screen.Alerts, Screen.About -> state.copy(
                 screen = state.navStack.lastOrNull() ?: Screen.Mine,
                 navStack = state.navStack.dropLast(1),
                 verifyUrl = "",

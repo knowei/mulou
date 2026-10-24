@@ -10,7 +10,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -111,6 +114,14 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -509,6 +520,10 @@ fun App(vm: AppViewModel) {
                                 Screen.Season -> "季度番剧"
                                 Screen.Index -> "分类索引"
                                 Screen.DayCalendar -> "更新表"
+        Screen.Rules -> "规则管理"
+        Screen.Advanced -> "高级设置"
+        Screen.Alerts -> "更新提醒"
+        Screen.About -> "关于"
                                 Screen.Downloads -> "下载"
                                 else -> ""
                             },
@@ -640,6 +655,10 @@ fun App(vm: AppViewModel) {
                 Screen.Season -> SeasonScreen(vm, state)
                 Screen.Index -> IndexScreen(vm, state)
                 Screen.DayCalendar -> DayCalendarScreen(vm, state)
+                Screen.Rules -> ReadableWidth { RulesScreen(vm, state) }
+                Screen.Advanced -> ReadableWidth { AdvancedScreen(vm, state) }
+                Screen.Alerts -> ReadableWidth { AlertsScreen(vm, state) }
+                Screen.About -> ReadableWidth { AboutScreen(vm, state) }
                 Screen.Downloads -> ReadableWidth { DownloadsScreen(vm, state) }
             }
             }
@@ -2925,8 +2944,459 @@ private fun DownloadEpisodeRow(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MineScreen(vm: AppViewModel, state: UiState) {
+    var showTheme by remember { mutableStateOf(false) }
+    val doneItems = state.downloads.filter { it.done }
+    val running = state.downloads.count { it.running }
+    val doneBytes = doneItems.sumOf { if (it.total > 0) it.total else it.bytes }
+    val paletteLabel = when (state.palette) {
+        "green" -> "护眼"
+        "dawn" -> "晨光"
+        else -> "蓝白"
+    }
+    val modeLabel = when (state.themeMode) {
+        "light" -> "浅色"
+        "dark" -> "暗色"
+        else -> "跟随系统"
+    }
+    val updateValue = when {
+        state.update != null -> "有新版本 ${state.update?.version}"
+        state.updateError.isNotEmpty() -> "检查失败"
+        state.updateCheckedAt > 0 -> "已是最新"
+        else -> "查看"
+    }
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 28.dp),
+    ) {
+        item {
+            Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
+                Text("我的", style = MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(12.dp))
+                MineBrandRow()
+                Spacer(Modifier.height(16.dp))
+                MineStats(
+                    watches = state.watches.size,
+                    rules = state.rules.size,
+                    downloaded = doneItems.size,
+                )
+            }
+        }
+
+        item { MineSectionTitle("我的内容") }
+        item {
+            MineRow(
+                icon = MineIcon.Download,
+                title = "下载",
+                subtitle = "已下载的剧集",
+                value = when {
+                    running > 0 -> "$running 个下载中"
+                    doneItems.isNotEmpty() -> "${doneItems.size} 集 · ${humanSize(doneBytes)}"
+                    else -> "离线观看"
+                },
+                onClick = vm::openDownloads,
+            )
+        }
+        item {
+            MineRow(
+                icon = MineIcon.Bell,
+                title = "更新提醒",
+                subtitle = "番剧更新时及时提醒",
+                value = if (state.alerts.isEmpty()) "暂无提醒" else "${state.alerts.size} 条",
+                onClick = vm::openAlerts,
+            )
+        }
+
+        item { MineSectionTitle("内容管理") }
+        item {
+            MineRow(
+                icon = MineIcon.Doc,
+                title = "规则管理",
+                subtitle = "导入与管理内容规则",
+                value = "${state.rules.size} 条规则",
+                onClick = vm::openRules,
+            )
+        }
+        item {
+            MineRow(
+                icon = MineIcon.Pulse,
+                title = "源体检",
+                subtitle = "检查规则源的可用性",
+                subtitle2 = "",
+                value = "",
+                onClick = vm::openHealth,
+            )
+        }
+
+        item { MineSectionTitle("偏好设置") }
+        item {
+            MineRow(
+                icon = MineIcon.Palette,
+                title = "外观",
+                subtitle = "主题与界面风格",
+                value = "$paletteLabel · $modeLabel",
+                dots = paletteDots(state.palette),
+                onClick = { showTheme = true },
+            )
+        }
+        item {
+            MineRow(
+                icon = MineIcon.Gear,
+                title = "高级设置",
+                subtitle = "索引与网络配置",
+                value = "",
+                onClick = vm::openAdvanced,
+            )
+        }
+
+        item { MineSectionTitle("关于") }
+        item {
+            MineRow(
+                icon = MineIcon.Info,
+                title = "木漏 Komo",
+                subtitle = "版本 ${BuildConfig.VERSION_NAME} · 自用",
+                value = updateValue,
+                onClick = vm::openAbout,
+            )
+        }
+    }
+
+    if (showTheme) {
+        ThemeSheet(vm, state) { showTheme = false }
+    }
+}
+
+/** 三套配色对应的小圆点，用来在「外观」这一行直接预览。 */
+private fun paletteDots(palette: String): List<Color> = when (palette) {
+    "green" -> listOf(Color(0xFF5C7A68), Color(0xFF8FAE9B), Color(0xFFC3D3C6))
+    "dawn" -> listOf(Color(0xFF6D8B84), Color(0xFFB99A6B), Color(0xFFE8DCC8))
+    else -> listOf(Color(0xFF2563EB), Color(0xFF7EA8F5), Color(0xFFCBDDF9))
+}
+
+/** 品牌区：圆形应用图标 + 名字 + 一句话。 */
+@Composable
+private fun MineBrandRow() {
+    val ctx = LocalContext.current
+    // 直接取应用图标当品牌图，省得再放一份重复的图片资源
+    val icon = remember {
+        runCatching {
+            ctx.packageManager.getApplicationIcon(ctx.packageName).toBitmap().asImageBitmap()
+        }.getOrNull()
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (icon != null) {
+            Image(
+                bitmap = icon,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape),
+            )
+        }
+        Spacer(Modifier.width(16.dp))
+        Column {
+            Text("木漏", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "K O M O",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                letterSpacing = 2.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "树叶间漏下来的光",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** 追番 / 规则 / 已下载，三个数字并排，中间用细竖线分开。 */
+@Composable
+private fun MineStats(watches: Int, rules: Int, downloaded: Int) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MineStat("$watches", "追番", Modifier.weight(1f))
+        VerticalDivider(Modifier.height(28.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        MineStat("$rules", "规则", Modifier.weight(1f))
+        VerticalDivider(Modifier.height(28.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        MineStat("$downloaded", "已下载", Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun MineStat(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(value, style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** 分组小标题，右边拖一条细线到边。 */
+@Composable
+private fun MineSectionTitle(title: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            letterSpacing = 1.sp,
+        )
+        Spacer(Modifier.width(10.dp))
+        HorizontalDivider(
+            Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+        )
+    }
+}
+
+/**
+ * 一行菜单：左边线性图标、中间标题+说明、右边值，末尾一个箭头。
+ */
+@Composable
+private fun MineRow(
+    icon: MineIcon,
+    title: String,
+    subtitle: String = "",
+    subtitle2: String = "",
+    value: String = "",
+    dots: List<Color> = emptyList(),
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MineGlyph(icon)
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            if (subtitle.isNotEmpty()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (dots.isNotEmpty()) {
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                dots.forEach { color ->
+                    Box(
+                        Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(color)
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                Text(value, style = MaterialTheme.typography.labelMedium)
+            }
+        } else if (value.isNotEmpty()) {
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+/** 「我的」页里的线性图标。material-icons-core 没有铃铛/文档/调色板，只能自己画。 */
+private enum class MineIcon { Download, Bell, Doc, Pulse, Palette, Gear, Info }
+
+@Composable
+private fun MineGlyph(icon: MineIcon, tint: Color = MaterialTheme.colorScheme.primary) {
+    Canvas(Modifier.size(26.dp)) {
+        val w = size.width
+        val h = size.height
+        val sw = w * 0.075f
+        val stroke = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        when (icon) {
+            MineIcon.Download -> {
+                drawLine(tint, Offset(w * .5f, h * .12f), Offset(w * .5f, h * .6f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(w * .26f, h * .38f), Offset(w * .5f, h * .62f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(w * .74f, h * .38f), Offset(w * .5f, h * .62f), sw, StrokeCap.Round)
+                val tray = Path().apply {
+                    moveTo(w * .16f, h * .74f)
+                    lineTo(w * .16f, h * .88f)
+                    lineTo(w * .84f, h * .88f)
+                    lineTo(w * .84f, h * .74f)
+                }
+                drawPath(tray, tint, style = stroke)
+            }
+
+            MineIcon.Bell -> {
+                val body = Path().apply {
+                    moveTo(w * .2f, h * .72f)
+                    lineTo(w * .26f, h * .64f)
+                    cubicTo(w * .27f, h * .46f, w * .29f, h * .34f, w * .5f, h * .24f)
+                    cubicTo(w * .71f, h * .34f, w * .73f, h * .46f, w * .74f, h * .64f)
+                    lineTo(w * .8f, h * .72f)
+                    close()
+                }
+                drawPath(body, tint, style = stroke)
+                drawArc(
+                    color = tint,
+                    startAngle = 0f,
+                    sweepAngle = 180f,
+                    useCenter = false,
+                    topLeft = Offset(w * .4f, h * .72f),
+                    size = Size(w * .2f, h * .18f),
+                    style = stroke,
+                )
+            }
+
+            MineIcon.Doc -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(w * .24f, h * .12f),
+                    size = Size(w * .52f, h * .78f),
+                    cornerRadius = CornerRadius(w * .1f, w * .1f),
+                    style = stroke,
+                )
+                drawLine(tint, Offset(w * .37f, h * .36f), Offset(w * .63f, h * .36f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(w * .37f, h * .52f), Offset(w * .63f, h * .52f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(w * .37f, h * .68f), Offset(w * .54f, h * .68f), sw, StrokeCap.Round)
+            }
+
+            MineIcon.Pulse -> {
+                val line = Path().apply {
+                    moveTo(w * .1f, h * .55f)
+                    lineTo(w * .3f, h * .55f)
+                    lineTo(w * .42f, h * .26f)
+                    lineTo(w * .56f, h * .78f)
+                    lineTo(w * .66f, h * .55f)
+                    lineTo(w * .9f, h * .55f)
+                }
+                drawPath(line, tint, style = stroke)
+            }
+
+            MineIcon.Palette -> {
+                drawCircle(tint, radius = w * .36f, center = center, style = stroke)
+                drawCircle(tint, radius = w * .055f, center = Offset(w * .5f, h * .3f))
+                drawCircle(tint, radius = w * .055f, center = Offset(w * .72f, h * .48f))
+                drawCircle(tint, radius = w * .055f, center = Offset(w * .38f, h * .68f))
+            }
+
+            MineIcon.Gear -> {
+                drawCircle(tint, radius = w * .17f, center = center, style = stroke)
+                for (angle in 0 until 8) {
+                    val rad = Math.toRadians(angle * 45.0)
+                    val dx = kotlin.math.cos(rad).toFloat()
+                    val dy = kotlin.math.sin(rad).toFloat()
+                    drawLine(
+                        tint,
+                        Offset(w * .5f + dx * w * .27f, h * .5f + dy * w * .27f),
+                        Offset(w * .5f + dx * w * .38f, h * .5f + dy * w * .38f),
+                        sw,
+                        StrokeCap.Round,
+                    )
+                }
+            }
+
+            MineIcon.Info -> {
+                drawCircle(tint, radius = w * .38f, center = center, style = stroke)
+                drawCircle(tint, radius = w * .045f, center = Offset(w * .5f, h * .33f))
+                drawLine(tint, Offset(w * .5f, h * .46f), Offset(w * .5f, h * .68f), sw, StrokeCap.Round)
+            }
+        }
+    }
+}
+
+/** 外观：主题色 + 明暗，放在底部弹层里，避免进二级页。 */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ThemeSheet(vm: AppViewModel, state: UiState, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 32.dp)) {
+            Text("外观", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "主题色",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    "blue" to "蓝白",
+                    "green" to "护眼",
+                    "dawn" to "晨光",
+                ).forEach { (palette, label) ->
+                    FilterChip(
+                        selected = state.palette == palette,
+                        onClick = { vm.setPalette(palette) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "明暗",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    "light" to "浅色",
+                    "dark" to "暗色",
+                    "system" to "跟随系统",
+                ).forEach { (mode, label) ->
+                    FilterChip(
+                        selected = state.themeMode == mode,
+                        onClick = { vm.setThemeMode(mode) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 规则管理：导入入口 + 规则列表（长按删除）。 */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun RulesScreen(vm: AppViewModel, state: UiState) {
     val clipboard = LocalClipboardManager.current
-    var showAllRules by remember { mutableStateOf(false) }
     var ruleToDelete by remember { mutableStateOf<AnimeRule?>(null) }
     val ctx = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(
@@ -2939,115 +3409,29 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
             if (text.isNullOrBlank()) vm.showError("读取文件失败") else vm.importRules(text)
         }
     }
-    val indexCount = state.home.days.sumOf { it.items.size }
-    val updated = if (state.home.updatedAt > 0) {
-        java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
-            .format(java.util.Date(state.home.updatedAt))
-    } else {
-        "从未"
-    }
 
     LazyColumn(
         Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 24.dp),
+        contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 28.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         item {
-            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp)) {
-                Text("我的", style = MaterialTheme.typography.headlineSmall)
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StatChip("${state.rules.size}", "规则")
-                    StatChip("$indexCount", "索引")
-                    StatChip("${state.watches.size}", "追番")
-                }
-                Spacer(Modifier.height(6.dp))
-            }
-        }
-
-        item {
-            val doneDownloads = state.downloads.count { it.done }
-            val runningDownloads = state.downloads.count { it.running }
-            MineEntryRow(
-                title = "下载",
-                subtitle = when {
-                    runningDownloads > 0 -> "$runningDownloads 个正在下载"
-                    doneDownloads > 0 -> "$doneDownloads 集"
-                    else -> "离线看已下载的集"
-                },
-                onClick = vm::openDownloads,
-            )
-            MineEntryRow(
-                title = "季度番剧",
-                subtitle = "按季度翻新番",
-                onClick = vm::openSeason,
-            )
-            MineEntryRow(
-                title = "源体检",
-                subtitle = "检测规则可用性",
-                onClick = vm::openHealth,
+            Text(
+                "共 ${state.rules.size} 条规则 · 长按任意一条可以删除",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
             )
         }
-
-        item { MineSection("索引") }
         item {
-            Card(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                ),
-            ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(
-                        "$indexCount 部 · 更新于 $updated",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    state.home.error?.let {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "最近一次失败：$it",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-            }
-        }
-        item {
-            Card(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                ),
-            ) {
-                Column(Modifier.padding(14.dp)) {
-                    IndexSettings(vm, state)
-                }
-            }
-        }
-
-        item { MineSection("规则") }
-        if (state.rules.isNotEmpty()) {
-            item {
-                Text(
-                    "长按任意一条可以删除",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 2.dp),
-                )
-            }
-        }
-        item {
-            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp)) {
                     Button(
                         onClick = vm::importRuleRepo,
                         enabled = !state.busy,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("导入规则源") }
-
                     Spacer(Modifier.height(8.dp))
-
                     OutlinedButton(
                         onClick = {
                             filePicker.launch(
@@ -3057,9 +3441,7 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                         enabled = !state.busy,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("从文件导入（.json / .ndjson）") }
-
                     Spacer(Modifier.height(8.dp))
-
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = {
@@ -3075,7 +3457,6 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                             modifier = Modifier.weight(1f),
                         ) { Text("示例") }
                     }
-
                     state.error?.let {
                         Spacer(Modifier.height(8.dp))
                         Text(
@@ -3087,13 +3468,10 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                 }
             }
         }
-
-        val visibleRules = if (showAllRules) state.rules else state.rules.take(6)
-        items(visibleRules, key = { it.name }) { rule ->
+        items(state.rules, key = { it.name }) { rule ->
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
                     .combinedClickable(
                         onClick = { vm.selectRule(rule) },
                         onLongClick = { ruleToDelete = rule },
@@ -3121,70 +3499,84 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                 }
             }
         }
+    }
 
-        if (state.rules.size > 6) {
-            item {
-                Text(
-                    if (showAllRules) "收起" else "查看全部 ${state.rules.size} 条规则",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showAllRules = !showAllRules }
-                        .padding(vertical = 10.dp),
-                    textAlign = TextAlign.Center,
-                )
-            }
-        }
+    ruleToDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { ruleToDelete = null },
+            title = { Text("删除规则") },
+            text = {
+                Text("删掉「${target.name}」？已下载的剧集和追番记录不受影响，只是搜源时不再用它。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.removeRule(target.name)
+                        ruleToDelete = null
+                    }
+                ) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { ruleToDelete = null }) { Text("取消") }
+            },
+        )
+    }
+}
 
-        item { MineSection("外观") }
+/** 高级设置：索引来源与缓存、源体检、原始搜源调试。 */
+@Composable
+private fun AdvancedScreen(vm: AppViewModel, state: UiState) {
+    val indexCount = state.home.days.sumOf { it.items.size }
+    val updated = if (state.home.updatedAt > 0) {
+        java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(state.home.updatedAt))
+    } else {
+        "从未"
+    }
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 28.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         item {
             Card(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                ),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(
+                        "$indexCount 部 · 更新于 $updated",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    state.home.error?.let {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "最近一次失败：$it",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
                 ),
             ) {
                 Column(Modifier.padding(14.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(
-                            "light" to "浅色",
-                            "dark" to "暗色",
-                            "system" to "跟随系统",
-                        ).forEach { (mode, label) ->
-                            FilterChip(
-                                selected = state.themeMode == mode,
-                                onClick = { vm.setThemeMode(mode) },
-                                label = { Text(label) },
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(
-                            "blue" to "蓝白",
-                            "green" to "护眼",
-                            "dawn" to "晨光",
-                        ).forEach { (palette, label) ->
-                            FilterChip(
-                                selected = state.palette == palette,
-                                onClick = { vm.setPalette(palette) },
-                                label = { Text(label) },
-                            )
-                        }
-                    }
+                    IndexSettings(vm, state)
                 }
             }
         }
-
-        item { MineSection("高级") }
         item {
-            Card(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                ),
-            ) {
+            Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp)) {
                     Button(
                         onClick = vm::openHealth,
@@ -3197,9 +3589,12 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-
-                    Spacer(Modifier.height(14.dp))
-
+                }
+            }
+        }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
                     Text("原始搜源（调试）", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(2.dp))
                     Text(
@@ -3226,83 +3621,135 @@ private fun MineScreen(vm: AppViewModel, state: UiState) {
                 }
             }
         }
+    }
+}
 
-        item { MineSection("关于") }
-        item {
+/** 更新提醒：等待片源更新的番剧，点进去直接播。 */
+@Composable
+private fun AlertsScreen(vm: AppViewModel, state: UiState) {
+    if (state.alerts.isEmpty()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            MineGlyph(MineIcon.Bell, tint = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "还没有提醒",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "在播放页选集里对还没更新的集点「提醒我」，源更新后会通知你",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
+        return
+    }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 28.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        items(state.alerts, key = { it.id }) { alert ->
             Card(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                ),
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { vm.openAlert(alert.id) }
             ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(
-                        "木漏 Komo ${BuildConfig.VERSION_NAME} · 自用",
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "名字取自「木漏れ日」：树叶间漏下来的光。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "应用不内置任何片源，所有内容来自你导入的规则；番剧元数据来自 Bangumi，更新时间来自 AniList。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(
-                            onClick = { vm.checkUpdate(manual = true) },
-                            enabled = !state.updateChecking,
-                        ) { Text(if (state.updateChecking) "检查中…" else "检查更新") }
-                        val hint = when {
-                            state.updateError.isNotEmpty() -> "检查失败：${state.updateError}"
-                            state.update != null -> "有新版本 ${state.update?.version}"
-                            state.updateCheckedAt > 0 -> "已是最新"
-                            else -> ""
-                        }
-                        if (hint.isNotEmpty()) {
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                hint,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (state.updateError.isNotEmpty()) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(alert.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "第 ${alert.episode} 集 · ${alert.ruleName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
+                    TextButton(onClick = { vm.removeAlert(alert.id) }) { Text("删除") }
                 }
             }
         }
     }
+}
 
-    ruleToDelete?.let { target ->
-        AlertDialog(
-            onDismissRequest = { ruleToDelete = null },
-            title = { Text("删除规则") },
-            text = {
-                Text("删掉「${target.name}」？已下载的剧集和追番记录不受影响，只是搜源时不再用它。")
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        vm.removeRule(target.name)
-                        ruleToDelete = null
-                    }
-                ) { Text("删除", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { ruleToDelete = null }) { Text("取消") }
-            },
+/** 关于：品牌、版本、检查更新、声明。 */
+@Composable
+private fun AboutScreen(vm: AppViewModel, state: UiState) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 18.dp, vertical = 16.dp),
+    ) {
+        MineBrandRow()
+        Spacer(Modifier.height(18.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(
+                onClick = { vm.checkUpdate(manual = true) },
+                enabled = !state.updateChecking,
+            ) { Text(if (state.updateChecking) "检查中…" else "检查更新") }
+            val hint = when {
+                state.updateError.isNotEmpty() -> "检查失败：${state.updateError}"
+                state.update != null -> "有新版本 ${state.update?.version}"
+                state.updateCheckedAt > 0 -> "已是最新"
+                else -> ""
+            }
+            if (hint.isNotEmpty()) {
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (state.updateError.isNotEmpty()) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.height(22.dp))
+        MineSectionTitle("关于")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "木漏 Komo ${BuildConfig.VERSION_NAME} · 自用",
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.padding(horizontal = 18.dp),
         )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "名字取自「木漏れ日」：树叶间漏下来的光。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 18.dp),
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "应用不内置任何片源，所有内容来自你导入的规则；番剧元数据来自 Bangumi，更新时间来自 AniList，弹幕来自哔哩哔哩与弹弹play。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 18.dp),
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "开源：github.com/knowei/mulou",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 18.dp),
+        )
+        Spacer(Modifier.height(28.dp))
     }
 }
 
