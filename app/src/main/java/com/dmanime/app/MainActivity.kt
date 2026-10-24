@@ -1094,21 +1094,24 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
     val subject = state.detail ?: return
     val info = state.detailInfo
     var expanded by remember(subject.id) { mutableStateOf(false) }
-    var showMore by remember(subject.id) { mutableStateOf(false) }
     val watched = state.watches.any { it.subjectId == subject.id }
+    val entry = state.watches.firstOrNull { it.subjectId == subject.id }
     val fromPlayer = state.detailOrigin == Screen.Player
     val summary = info?.summary?.takeIf { it.isNotBlank() } ?: subject.summary
     // 平板上一列铺到 900dp 后，110dp 的封面小得像个缩略图，按屏宽放大
     val posterWidth = (LocalConfiguration.current.screenWidthDp / 8).coerceIn(110, 200).dp
+    val aired = AiringState.airedCount(info)
+    val total = AiringState.totalEpisodes(info)
+    val tags = info?.tags.orEmpty().take(3)
 
     LazyColumn(Modifier.fillMaxSize()) {
         item {
-            Row(Modifier.padding(16.dp)) {
+            Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 14.dp)) {
                 Box(
                     Modifier
                         .width(posterWidth)
                         .aspectRatio(2f / 3f)
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                 ) {
                     val cover = subject.coverUrl.withImageBase(state.imageBase)
@@ -1123,12 +1126,18 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
                 }
                 Spacer(Modifier.width(16.dp))
                 Column {
-                    Text(subject.displayTitle, style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        subject.displayTitle,
+                        style = MaterialTheme.typography.headlineSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
 
                     val originalName = info?.name?.takeIf {
                         it.isNotBlank() && it != subject.displayTitle
                     }
                     if (originalName != null) {
+                        Spacer(Modifier.height(2.dp))
                         Text(
                             originalName,
                             style = MaterialTheme.typography.bodySmall,
@@ -1140,7 +1149,7 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
 
                     val score = info?.rating?.score?.takeIf { it > 0 } ?: subject.rating.score
                     if (score > 0) {
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(10.dp))
                         Row(verticalAlignment = Alignment.Bottom) {
                             Text(
                                 "%.1f".format(score),
@@ -1152,10 +1161,10 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
                             )
-                            val total = info?.rating?.total ?: 0
-                            if (total > 0) {
+                            val ratingTotal = info?.rating?.total ?: 0
+                            if (ratingTotal > 0) {
                                 Text(
-                                    "  ·  $total 人评分",
+                                    "  ·  $ratingTotal 人评分",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -1163,22 +1172,22 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
                         }
                     }
 
+                    // 放送年份 · 平台 · 集数，一条带点的元信息行，比竖着排三行省地方
                     Spacer(Modifier.height(6.dp))
+                    val date = info?.effectiveAirDate?.takeIf { it.isNotEmpty() } ?: subject.airDate
                     val meta = buildList {
-                        if (info?.episodeLabel?.isNotEmpty() == true) add(info.episodeLabel)
+                        if (date.isNotEmpty()) add(date.take(4))
                         if (!info?.platform.isNullOrEmpty()) add(info.platform)
-                        val date = info?.effectiveAirDate?.takeIf { it.isNotEmpty() } ?: subject.airDate
-                        if (date.isNotEmpty()) add("放送 $date")
+                        if (total > 0) add("全 $total 集")
                     }
-                    meta.forEach {
+                    if (meta.isNotEmpty()) {
                         Text(
-                            it,
+                            meta.joinToString("  ·  "),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
 
-                    // 下一集什么时候播（数据来自 AniList，匹配不上就不显示）
                     state.airing?.let { airing ->
                         Spacer(Modifier.height(6.dp))
                         Text(
@@ -1187,129 +1196,196 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
                             color = MaterialTheme.colorScheme.primary,
                         )
                     }
-                }
-            }
-        }
 
-        item {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // 从播放页进的详情只当"资料页"：不再给播放入口，
-                // 否则 播放 → 详情 → 播放 会来回打转，用户退不出去。
-                if (!fromPlayer) {
-                    Button(
-                        onClick = vm::playCurrentSubject,
-                        enabled = state.rules.isNotEmpty(),
-                        modifier = Modifier.weight(1f),
-                    ) { Text("播放") }
-                }
-
-                OutlinedButton(
-                    onClick = vm::toggleWatch,
-                    modifier = Modifier.weight(1f),
-                ) { Text(if (watched) "已追番" else "追番") }
-            }
-        }
-
-        // 选集入口：点开弹出集数面板（后台先找源，找到直接铺集数）
-        // 放在主操作正下方——它比角色横条、标签更常用，之前得先滑一屏才看到。
-        if (!fromPlayer) item {
-            val summaryText = AiringState.summary(info)
-            OutlinedButton(
-                onClick = vm::openEpisodeSheet,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            ) {
-                Text(if (summaryText.isEmpty()) "选集" else "选集 · $summaryText")
-            }
-        }
-
-        if (summary.isNotBlank()) {
-            item {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Text(
-                        summary,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = if (expanded) Int.MAX_VALUE else 4,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (summary.length > 90) {
-                        TextButton(
-                            onClick = { expanded = !expanded },
-                            contentPadding = PaddingValues(0.dp),
-                        ) { Text(if (expanded) "收起" else "展开简介") }
+                    if (tags.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            tags.forEach { tag ->
+                                Text(
+                                    tag.name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // 角色 / 声优 / 标签：都属于"想看的才看"，默认收起，首屏才有留白。
-        val hasMore = state.characters.isNotEmpty() || !info?.tags.isNullOrEmpty()
-        if (hasMore) {
+        // 主操作：继续观看（带上次进度）+ 追番。
+        // 从播放页进的详情只当"资料页"，不给播放入口，否则 播放 → 详情 → 播放 会来回打转。
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!fromPlayer) {
+                    Button(
+                        onClick = vm::playCurrentSubject,
+                        enabled = state.rules.isNotEmpty(),
+                        modifier = Modifier.weight(2f).height(56.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                if (entry != null && entry.hasProgress) {
+                                    "继续观看 第 ${entry.episodeIndex + 1} 集"
+                                } else {
+                                    "开始观看"
+                                },
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            if (entry != null && entry.positionMs > 0) {
+                                Text(
+                                    "上次看到 ${formatDuration(entry.positionMs)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = vm::toggleWatch,
+                    // 定宽而不是 weight：「已追番」加对勾会被挤成两行
+                    modifier = Modifier.width(132.dp).height(56.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) {
+                    if (watched) {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(if (watched) "已追番" else "追番", maxLines = 1)
+                }
+            }
+        }
+
+        // 选集只留一个入口，格子放到弹层里：详情页常驻 12 格会把简介和角色挤到两屏外，
+        // 而且这页主要还是「要不要看」，真要挑集是一个动作，弹出来更快。
+        if (!fromPlayer && total > 0) {
             item {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable { showMore = !showMore }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .padding(start = 16.dp, end = 16.dp, top = 22.dp, bottom = 2.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                        .clickable(onClick = vm::openEpisodeSheet)
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    Text("选集", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.width(10.dp))
                     Text(
-                        "角色 / 标签",
-                        style = MaterialTheme.typography.titleSmall,
+                        if (aired in 1 until total) "更新至 $aired 集 / 共 $total 集" else "共 $total 集",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
-                    Text(
-                        if (showMore) "收起" else "展开",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    if (entry != null) {
+                        Text(
+                            "在看第 ${entry.episodeIndex + 1} 集",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                    }
                     Icon(
-                        if (showMore) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
                     )
                 }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
             }
         }
 
-        if (showMore && state.characters.isNotEmpty()) {
+        if (summary.isNotBlank()) {
+            item {
+                Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 22.dp)) {
+                    Text("简介", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = if (expanded) Int.MAX_VALUE else 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (summary.length > 60) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { expanded = !expanded }
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (expanded) "收起" else "展开",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Icon(
+                                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (state.characters.isNotEmpty()) {
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("角色 / 声优", style = MaterialTheme.typography.titleMedium)
+                }
+            }
             item {
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     items(state.characters.take(24), key = { it.id }) { character ->
-                        Column(Modifier.width(84.dp)) {
+                        Column(Modifier.width(76.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             Box(
                                 Modifier
-                                    .width(84.dp)
-                                    // 角色立绘是全身像：用 2:3 + Fit，宁可有留白也不裁掉头
-                                    .aspectRatio(2f / 3f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    // 立绘本身是白底 JPEG，容器也用白色，和图片融为一体
+                                    .size(76.dp)
+                                    .clip(CircleShape)
+                                    // 立绘是全身像：圆形里用 Top 对齐裁上半身，脸才在框里
                                     .background(Color.White),
-                                contentAlignment = Alignment.Center,
                             ) {
                                 val url = character.imageUrl.withImageBase(state.imageBase)
                                 if (url.isNotEmpty()) {
                                     AsyncImage(
                                         model = url,
                                         contentDescription = character.name,
-                                        contentScale = ContentScale.Fit,
+                                        contentScale = ContentScale.Crop,
+                                        alignment = Alignment.TopCenter,
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                 }
                             }
-                            Spacer(Modifier.height(4.dp))
+                            Spacer(Modifier.height(6.dp))
                             Text(
                                 character.name,
-                                style = MaterialTheme.typography.labelSmall,
-                                // 固定两行：名字长短不一会让整行高度跳动，下面的选集跟着抖
-                                minLines = 2,
-                                maxLines = 2,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             val cv = character.actorNames
@@ -1317,7 +1393,6 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
                                 if (cv.isBlank()) " " else "CV $cv",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                minLines = 1,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -1327,23 +1402,10 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
             }
         }
 
-        if (showMore && !info?.tags.isNullOrEmpty()) {
-            item {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    items(info.tags.take(12), key = { it.name }) { tag ->
-                        AssistChip(onClick = {}, label = { Text(tag.name) })
-                    }
-                }
-            }
-        }
-
-        if (state.detailLoading) {
+        if (state.detailLoading || state.busy) {
             item {
                 LinearProgressIndicator(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
                 )
             }
         }
@@ -1353,20 +1415,12 @@ private fun DetailScreen(vm: AppViewModel, state: UiState) {
                 Text(
                     "还没有规则，去「我的」导入规则源后才能找片源。",
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = 16.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
         }
 
-        if (state.busy) {
-            item {
-                LinearProgressIndicator(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-            }
-        }
-
-        item { Spacer(Modifier.height(24.dp)) }
+        item { Spacer(Modifier.height(28.dp)) }
     }
 
     // 选集弹层：点某一集直接进播放页
