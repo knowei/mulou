@@ -155,6 +155,7 @@ import com.dmanime.catalog.TitleVersion
 import kotlinx.coroutines.delay
 import java.io.File
 import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 
 // ------------------------------------------------------------------ 主题（蓝白 / 护眼）
 
@@ -887,24 +888,26 @@ private fun SectionHeader(title: String, subtitle: String) {
     }
 }
 
-/** 首页「更新」区块能来回翻几天：前天到后天（一周七天的日历本来就都在手里）。 */
-private const val DAY_MIN = -2
-private const val DAY_MAX = 2
+/** 更新表能翻的范围：日历总共就一周，往前到上周日、往后到本周日。 */
+private const val DAY_MIN = -6
+private const val DAY_MAX = 6
 
 private fun dayTitle(offset: Int): String = when (offset) {
     -2 -> "前天更新"
     -1 -> "昨日更新"
+    0 -> "今日更新"
     1 -> "明日更新"
     2 -> "后天更新"
-    else -> "今日更新"
+    else -> if (offset < 0) "${-offset} 天前" else "${offset} 天后"
 }
 
 private fun dayEmptyText(offset: Int): String = when (offset) {
     -2 -> "前天没有更新"
     -1 -> "昨天没有更新"
+    0 -> "今天没有更新"
     1 -> "明天没有更新"
     2 -> "后天没有更新"
-    else -> "今天没有更新"
+    else -> "这天没有番剧更新"
 }
 
 @Composable
@@ -2195,8 +2198,11 @@ private fun IndexChip(label: String, selected: Boolean, onClick: () -> Unit) {
 
 // ------------------------------------------------------------------ 更新表
 
+/** 一周七格从左到右，跟日历一样周一开头。 */
+private val WEEK_HEAD = listOf("一", "二", "三", "四", "五", "六", "日")
+
 /**
- * 更新表：一屏看完某一天的更新，按 ◀ ▶ 换日期。
+ * 更新表：先看这一周哪几天有更新，点哪天看哪天。
  *
  * 数据是首页已经取回来的七日日历，换日期只是换 weekday 取同一份数据，
  * 所以这里没有加载态，也不该有等待感。
@@ -2205,48 +2211,117 @@ private fun IndexChip(label: String, selected: Boolean, onClick: () -> Unit) {
 private fun DayCalendarScreen(vm: AppViewModel, state: UiState) {
     val days = state.home.days
     val offset = state.dayOffset
-    val weekdayId = (((LocalDate.now().dayOfWeek.value + offset - 1) % 7) + 7) % 7 + 1
-    val day = days.today(weekdayId)
+    val today = LocalDate.now()
+    val date = today.plusDays(offset.toLong())
+    val day = days.today(date.dayOfWeek.value)
     val items = day?.items.orEmpty()
+    val weekStart = date.minusDays((date.dayOfWeek.value - 1).toLong())
 
     Column(Modifier.fillMaxSize()) {
+        // 月份 + 一键回到今天
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp, top = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "◀",
+                "${date.year}年${date.monthValue}月",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "今天",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (offset == 0) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = offset != 0) { vm.setDayOffset(0) }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
+
+        // 一周七格；选中的那天填主色，超出一周范围的灰掉
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            WEEK_HEAD.forEachIndexed { index, name ->
+                val cell = weekStart.plusDays(index.toLong())
+                val delta = ChronoUnit.DAYS.between(today, cell).toInt()
+                val selected = delta == offset
+                val usable = delta in DAY_MIN..DAY_MAX
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (selected) MaterialTheme.colorScheme.primary
+                            else Color.Transparent
+                        )
+                        .clickable(enabled = usable) { vm.setDayOffset(delta) }
+                        .padding(vertical = 5.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(1.dp))
+                    Text(
+                        cell.dayOfMonth.toString(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = when {
+                            selected -> MaterialTheme.colorScheme.onPrimary
+                            !usable -> MaterialTheme.colorScheme.outlineVariant
+                            else -> MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                }
+            }
+        }
+
+        // 眼下这一天是哪天、几部
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "${date.monthValue}月${date.dayOfMonth}日 ${day?.weekday?.cn.orEmpty()}",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    "${dayTitle(offset)} · ${items.size} 部",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                "‹",
                 style = MaterialTheme.typography.titleMedium,
                 color = if (offset > DAY_MIN) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.outlineVariant,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = offset > DAY_MIN) { vm.shiftDay(-1) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 2.dp),
             )
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    dayTitle(offset),
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center,
-                )
-                Text(
-                    day?.weekday?.cn.orEmpty(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             Text(
-                "▶",
+                "›",
                 style = MaterialTheme.typography.titleMedium,
                 color = if (offset < DAY_MAX) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.outlineVariant,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = offset < DAY_MAX) { vm.shiftDay(1) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 2.dp),
             )
         }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
         if (items.isEmpty()) {
             Text(

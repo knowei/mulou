@@ -63,8 +63,8 @@ import java.net.URL
 
 enum class Screen { Home, Search, Mine, Downloads, Detail, Chapters, Player, Verify, Health, Season, Index, DayCalendar }
 
-/** 「更新表」能往前/往后翻几天。日历一次给一周，所以这个范围内都能立刻切。 */
-private const val DAY_MAX_OFFSET = 2
+/** 「更新表」能选的范围。日历一次给一周，所以这个范围内都能立刻切。 */
+private const val DAY_MAX_OFFSET = 6
 
 /** 一个源的体检结果。status: ok / empty / error */
 data class SourceHealth(
@@ -650,6 +650,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** ◀ ▶ 在更新表里翻日期（前天 ~ 后天）。 */
     fun shiftDay(delta: Int) {
         state = state.copy(dayOffset = (state.dayOffset + delta).coerceIn(-DAY_MAX_OFFSET, DAY_MAX_OFFSET))
+    }
+
+    /** 点上面那排日历格子，直接跳到那一天。 */
+    fun setDayOffset(value: Int) {
+        state = state.copy(dayOffset = value.coerceIn(-DAY_MAX_OFFSET, DAY_MAX_OFFSET))
     }
 
     /** ◀ ▶ 切季度。 */
