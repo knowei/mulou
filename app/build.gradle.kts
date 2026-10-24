@@ -1,4 +1,4 @@
-﻿import java.util.Properties
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -38,8 +38,8 @@ android {
         applicationId = "com.dmanime.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 5
+        versionName = "1.4"
 
         // 弹弹play 开放平台凭证也不进仓库，本机 local.properties 里写：
         //   komo.dandanplay.appId=...
