@@ -31,3 +31,15 @@ val RULE_REPO_MIRRORS = listOf(
     "https://cdn.jsdelivr.net/gh/Predidit/KazumiRules@main/",
     "https://raw.githubusercontent.com/Predidit/KazumiRules/main/",
 )
+
+/**
+ * 我们自己维护的规则包（`rules/rules.ndjson` + `rules/manifest.json`）。
+ *
+ * 跟上面的 KazumiRules 不是一回事：那个是别人的通用规则库，这个是我们一条条
+ * 体检过、修过 XPath、补过 encrypt=2 解密和独立线路分隔符的版本。
+ */
+val RULE_SYNC_MIRRORS = listOf(
+    "https://cdn.jsdelivr.net/gh/knowei/mulou@main/rules/",
+    "https://fastly.jsdelivr.net/gh/knowei/mulou@main/rules/",
+    "https://raw.githubusercontent.com/knowei/mulou/main/rules/",
+)

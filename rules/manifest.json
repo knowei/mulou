@@ -1,0 +1,7 @@
+{
+  "count": 27,
+  "sha256": "f759950dc9741846f9d86c7cb32a9aef4284923a2ed3a3552bc47bdb48ee2760",
+  "updatedAt": "2026-10-30",
+  "file": "rules.ndjson",
+  "note": "由 tools/publish-rules.py 生成，App 按内容比对，不看版本号"
+}

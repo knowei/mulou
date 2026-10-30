@@ -3611,6 +3611,66 @@ private fun ThemeSheet(vm: AppViewModel, state: UiState, onDismiss: () -> Unit) 
     }
 }
 
+/**
+ * 规则包更新卡片。
+ *
+ * 检查本身是静默的（一天一次，开机顺手查），有差异才在这里亮出来：
+ * 规则换错了要能一眼看出是哪几条动过，所以把名字列出来。
+ */
+@Composable
+private fun RuleSyncCard(vm: AppViewModel, state: UiState) {
+    val added = state.ruleSyncAdded
+    val updated = state.ruleSyncUpdated
+    val pending = added.isNotEmpty() || updated.isNotEmpty()
+    val ago = state.ruleSyncAt.takeIf { it > 0 }?.let { ms ->
+        val minutes = ((System.currentTimeMillis() - ms) / 60_000).coerceAtLeast(0)
+        when {
+            minutes < 1 -> "刚刚"
+            minutes < 60 -> "$minutes 分钟前"
+            minutes < 24 * 60 -> "${minutes / 60} 小时前"
+            else -> "${minutes / (24 * 60)} 天前"
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text(
+                when {
+                    state.ruleSyncChecking -> "正在检查规则更新…"
+                    state.ruleSyncError.isNotBlank() -> "检查失败：${state.ruleSyncError}"
+                    pending -> "规则包有更新"
+                    ago != null -> "规则已是最新 · ${ago}查过"
+                    else -> "还没检查过规则更新"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (pending) {
+                Spacer(Modifier.height(4.dp))
+                val names = added.map { "＋$it" } + updated.map { "↻$it" }
+                Text(
+                    names.take(6).joinToString("   ") + if (names.size > 6) "   …" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = { if (pending) vm.applyRuleUpdates() else vm.checkRuleUpdates(manual = true) },
+                    enabled = !state.ruleSyncChecking,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (pending) "更新 ${added.size + updated.size} 条" else "检查更新")
+                }
+                if (pending) {
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = vm::dismissRuleUpdates) { Text("以后再说") }
+                }
+            }
+        }
+    }
+}
+
 /** 规则管理：导入入口 + 规则列表（长按删除）。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -3641,6 +3701,9 @@ private fun RulesScreen(vm: AppViewModel, state: UiState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
             )
+        }
+        item {
+            RuleSyncCard(vm, state)
         }
         item {
             Card(Modifier.fillMaxWidth()) {

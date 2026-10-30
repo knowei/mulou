@@ -29,6 +29,7 @@ import com.dmanime.danmaku.BiliReply
 import com.dmanime.danmaku.Danmaku
 import com.dmanime.danmaku.DanmakuOrigin
 import com.dmanime.rules.EpisodeIndex
+import com.dmanime.rules.RuleSync
 import com.dmanime.rules.css1.Css1Converter
 import com.dmanime.rules.engine.MacCmsPlayer
 import com.dmanime.rules.engine.RuleEngine
@@ -288,6 +289,16 @@ data class UiState(
     val updateInstallError: String = "",
     /** 系统不让装（需要用户去设置里允许「安装未知应用」）。 */
     val updateNeedPermission: Boolean = false,
+    /** 正在向仓库要规则包。 */
+    val ruleSyncChecking: Boolean = false,
+    /** 远端有、本地没有（按名字）。 */
+    val ruleSyncAdded: List<String> = emptyList(),
+    /** 同名但内容不同，等着替换。 */
+    val ruleSyncUpdated: List<String> = emptyList(),
+    /** 上次检查成功的时间。 */
+    val ruleSyncAt: Long = 0L,
+    /** 检查失败的原因（只显示在规则页，不弹错误条）。 */
+    val ruleSyncError: String = "",
 )
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -317,6 +328,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Bangumi 搜索的 offset ≥ 1000 返回空，分类索引翻到这里就到底了。 */
         const val INDEX_OFFSET_LIMIT = 980
+
+        /** 规则包多久自动查一次：规则一两周才动几条，一天一回足够。 */
+        const val RULE_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000L
     }
 
     var state by mutableStateOf(UiState())
@@ -335,6 +349,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         )
     )
     private val ruleFile = File(app.filesDir, "rules.ndjson")
+    /** 最近一次从仓库拉到的规则包，等用户点「更新」再落到本地。 */
+    private var pendingRemoteRules: List<AnimeRule> = emptyList()
     private val searchPrefs = app.getSharedPreferences("search", android.content.Context.MODE_PRIVATE)
     private val uiPrefs = app.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE)
     private val catalog = CatalogRepository(app)
@@ -422,6 +438,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             DownloadUtil.manager.addListener(downloadListener)
         }
         refreshDownloads()
+
+        // 规则包自动查一次：有差异只在规则页里显示，不弹窗打扰
+        checkRuleUpdates(manual = false)
     }
 
     // ---------- 索引 ----------
@@ -1932,6 +1951,89 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         )
         appendLog("删除规则：$name（剩 ${left.size} 条）")
         persist()
+    }
+
+    /**
+     * 检查规则包有没有更新。
+     *
+     * 规则包放在我们自己的仓库里（`rules/rules.ndjson`），按**内容**比对：
+     * 远端有本地没有 → 新增，同名但内容不同 → 更新，本地多出来的（用户自己
+     * 导入的源）一律不动。没有差异就不打扰用户，只写一行日志。
+     */
+    fun checkRuleUpdates(manual: Boolean = false) {
+        if (state.ruleSyncChecking) return
+        if (!manual) {
+            val last = uiPrefs.getLong("rule_sync_at", 0L)
+            if (System.currentTimeMillis() - last < RULE_SYNC_INTERVAL_MS) return
+        }
+        state = state.copy(ruleSyncChecking = true, ruleSyncError = "")
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { fetchRemoteRules() } }
+            result.onSuccess { (remote, source) ->
+                val diff = RuleSync.diff(state.rules, remote)
+                pendingRemoteRules = remote
+                val now = System.currentTimeMillis()
+                uiPrefs.edit().putLong("rule_sync_at", now).apply()
+                state = state.copy(
+                    ruleSyncChecking = false,
+                    ruleSyncAdded = diff.addedNames,
+                    ruleSyncUpdated = diff.updatedNames,
+                    ruleSyncAt = now,
+                    ruleSyncError = "",
+                )
+                if (diff.isEmpty) {
+                    appendLog("规则已是最新（${state.rules.size} 条）")
+                } else {
+                    appendLog("规则有更新（$source）：新增 ${diff.added.size} 条、更新 ${diff.updated.size} 条")
+                }
+            }.onFailure {
+                val reason = it.message ?: "检查失败"
+                state = state.copy(ruleSyncChecking = false, ruleSyncError = reason)
+                if (manual) showError("规则检查失败：$reason") else appendLog("规则检查失败：$reason")
+            }
+        }
+    }
+
+    /** 把刚拉到的规则包合并进本地（同名替换，新名字追加）。 */
+    fun applyRuleUpdates() {
+        val remote = pendingRemoteRules
+        if (remote.isEmpty()) return
+        val diff = RuleSync.diff(state.rules, remote)
+        val merged = RuleSync.apply(state.rules, diff)
+        pendingRemoteRules = emptyList()
+        state = state.copy(
+            rules = merged,
+            ruleSyncAdded = emptyList(),
+            ruleSyncUpdated = emptyList(),
+            selected = state.selected?.let { sel -> merged.firstOrNull { it.name == sel.name } },
+            error = null,
+        )
+        appendLog("规则已更新：新增 ${diff.added.size} 条、更新 ${diff.updated.size} 条（共 ${merged.size} 条）")
+        persist()
+    }
+
+    /** 用户点了「以后再说」：这次的差异丢掉，不再提示。 */
+    fun dismissRuleUpdates() {
+        pendingRemoteRules = emptyList()
+        state = state.copy(ruleSyncAdded = emptyList(), ruleSyncUpdated = emptyList())
+    }
+
+    private fun fetchRemoteRules(): Pair<List<AnimeRule>, String> {
+        var lastError: Throwable? = null
+        for (base in RULE_SYNC_MIRRORS) {
+            val attempt = runCatching {
+                val text = fetchText(base + "rules.ndjson", "")
+                val rules = text.split('\n')
+                    .map { it.trim() }
+                    .filter { it.startsWith("{") }
+                    .mapNotNull { line -> runCatching { parseRule(line) }.getOrNull() }
+                if (rules.isEmpty()) error("规则包是空的")
+                rules to base.substringAfter("//").substringBefore("/")
+            }
+            attempt.onSuccess { return it }
+            lastError = attempt.exceptionOrNull()
+        }
+        throw lastError ?: IllegalStateException("所有镜像都不可用")
     }
 
     /**
