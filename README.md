@@ -158,6 +158,28 @@ git tag v1.2 && git push origin v1.2
 
 规则落盘到 `filesDir/rules.ndjson`，重启仍在。
 
+### 规则自动更新
+
+规则包放在本仓库的 [`rules/`](rules/)：`rules.ndjson`（一条一行）+ `manifest.json`（条数与指纹，
+给人看的，App 不依赖它）。App 开机静默查一次、24 小时节流，从 jsDelivr / raw.githubusercontent
+三个镜像取，**按内容逐条比对**（不看 `version` 字段——规则包里它经常没跟着改）：
+
+- 远端有、本地没有 → 新增
+- 同名但内容不同 → 更新
+- 本地多出来的（你自己导入的源）→ 永远不动
+
+有差异只在 `我的 → 规则管理` 顶部那张卡里亮出来，把动过的规则名列出来（`＋新增` / `↻更新`），
+点「更新 N 条」才落盘。不弹窗——「发现新版本」那个弹窗已经够打扰了。
+
+改完规则发布：
+
+```bash
+python tools/publish-rules.py   # 按名字排序、校验 name/baseURL、写 manifest、刷 jsDelivr 缓存
+git add rules && git commit -m "chore(rules): 更新规则包" && git push
+```
+
+脚本从 `dist/rules.ndjson` 读（本地产物目录）。手动改完记得在 App 里「检查更新」验证一次。
+
 ### 番剧索引
 
 默认取 Bangumi 公开接口，缓存优先：先读本地缓存渲染，再后台刷新，刷新失败不清空缓存。

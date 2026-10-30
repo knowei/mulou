@@ -38,8 +38,8 @@ android {
         applicationId = "com.dmanime.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.4"
+        versionCode = 6
+        versionName = "1.5"
 
         // 弹弹play 开放平台凭证也不进仓库，本机 local.properties 里写：
         //   komo.dandanplay.appId=...
