@@ -74,7 +74,21 @@ def main():
 
     print("已发布 %d 条规则（跳过 %d 条）→ rules/rules.ndjson" % (len(rules), bad))
     print("sha256 %s" % digest[:16])
+    purge()
     return 0
+
+
+def purge():
+    """推完记得刷 jsDelivr 缓存：@main 的 CDN 缓存最长能挂 12 小时，
+    不刷的话 App 那边会一直判定「已是最新」。"""
+    url = "https://purge.jsdelivr.net/gh/knowei/mulou@main/rules/rules.ndjson"
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            print("jsDelivr 缓存已刷新（%s）" % resp.status)
+    except Exception as e:
+        print("jsDelivr 刷新失败（不影响 raw.githubusercontent）：%s" % e)
 
 
 if __name__ == "__main__":

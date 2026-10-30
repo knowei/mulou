@@ -413,6 +413,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             imageBase = catalog.imageBase,
             themeMode = uiPrefs.getString("theme", "light") ?: "light",
             palette = uiPrefs.getString("theme_palette", "blue") ?: "blue",
+            ruleSyncAt = uiPrefs.getLong("rule_sync_at", 0L),
             autoNext = uiPrefs.getBoolean("auto_next", true),
             danmakuOn = uiPrefs.getBoolean("danmaku_on", true),
             danmakuAlpha = uiPrefs.getFloat("danmaku_alpha", 0.92f),
